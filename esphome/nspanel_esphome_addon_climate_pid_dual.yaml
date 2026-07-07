@@ -1,0 +1,273 @@
+#####################################################################################################
+#####                 NSPanel Easy - https://github.com/edwardtfn/NSPanel-Easy                  #####
+#####################################################################################################
+##### ESPHome Add-on for Climate control - PID Dual (Community-Anpassung)                       #####
+#####                                                                                           #####
+##### Ersetzt nspanel_esphome_addon_climate_dual.yaml durch eine PI/PWM-Regelung                #####
+##### (geeignet fuer traege Systeme wie Fussbodenheizung).                                      #####
+#####                                                                                           #####
+##### Architektur:                                                                              #####
+#####   - thermostat_embedded bleibt als Sollwert-Halter und UI-Schnittstelle erhalten          #####
+#####     (Display-Seite "climate", Klima-Chip und Blueprint funktionieren unveraendert),       #####
+#####     schaltet aber nur noch den Dummy-Relay 0 -> keine direkte Relais-Steuerung.           #####
+#####   - Zwei interne PID-Regler (Heizen/Kuehlen) uebernehmen die eigentliche Regelung.        #####
+#####     Sollwerte: target_temperature_low -> PID Heizen, target_temperature_high -> PID       #####
+#####     Kuehlen. Der Modus (off/heat/cool/heat_cool) wird ebenfalls uebernommen.              #####
+#####   - Die Relais werden ueber slow_pwm moduliert (Zykluszeit ${pwm_period}s).               #####
+#####                                                                                           #####
+##### Einbindung: siehe Beispiel am Ende der Datei. WICHTIG: Zusaetzlich muss                   #####
+##### esphome/nspanel_esphome_addon_climate_base.yaml im remote_package geladen werden,         #####
+##### und die originalen climate_heat/cool/dual-Dateien duerfen NICHT geladen sein.             #####
+#####################################################################################################
+---
+substitutions:
+  ##############################
+  ## Change only in your      ##
+  ## local yaml substitutions ##
+  ##############################
+  ### PID-Parameter (Startwerte fuer Fussbodenheizung) ###
+  # kp: Stellgroessen-Anteil pro Kelvin Abweichung (0.3 = 30 %/K)
+  # ki: kp / Nachstellzeit in Sekunden (0.3 / 10800s = 3h -> 0.00003)
+  # kd: D-Anteil, bei traegem Estrich nicht sinnvoll -> 0
+  pid_kp: "0.3"
+  pid_ki: "0.00003"
+  pid_kd: "0.0"
+  # Totzone um den Sollwert (in Kelvin/°C, auch bei temp_units °F!)
+  pid_deadband: "0.25"
+  # PWM-Zykluszeit in Sekunden (1200 s = 20 min)
+  pwm_period: "1200"
+  # Start-I-Anteil nach Neustart (0.0..1.0). Der I-Speicher wird nicht im Flash
+  # persistiert; ein sinnvoller Startwert (z. B. die typische mittlere
+  # Stellgroesse im Winter, etwa "0.3") verkuerzt das Einschwingen nach Reboot.
+  pid_starting_integral: "0.0"
+  # Sync-Intervall Thermostat -> PID in Sekunden
+  pid_sync_interval: "10"
+  TAG_ADDON_CLIMATE_PID: nspanel.addon.climate.pid
+
+esphome:
+  platformio_options:
+    build_flags:
+      # Gleiche Flag wie das originale Dual-Add-on, damit die unveraenderte
+      # climate_base die Dual-UI (zwei Sollwerte) auf dem Display aktiviert.
+      - -D NSPANEL_EASY_ADDON_CLIMATE_DUAL
+      - -D NSPANEL_EASY_ADDON_CLIMATE_PID
+
+#####################################################################################################
+##### 1. Thermostat "entwaffnen": Er haelt Sollwerte/Modus fuer UI & HA, schaltet aber nur      #####
+#####    den Dummy-Relay 0. Deadband/Overrun steuern damit nur noch die Aktivitaets-Anzeige     #####
+#####    (Klima-Chip Heizen/Kuehlen), nicht mehr die Relais.                                    #####
+#####################################################################################################
+climate:
+  - id: !extend thermostat_embedded
+    min_cooling_off_time: 1s
+    min_heating_off_time: 1s
+    min_cooling_run_time: 1s
+    min_heating_run_time: 1s
+    cool_deadband: ${cool_deadband} ${temp_units}
+    cool_overrun: ${cool_overrun} ${temp_units}
+    heat_deadband: ${heat_deadband} ${temp_units}
+    heat_overrun: ${heat_overrun} ${temp_units}
+    cool_action:
+      - switch.turn_on: relay_0   # Dummy - Relais werden von den PIDs geschaltet
+    heat_action:
+      - switch.turn_on: relay_0   # Dummy
+    idle_action:
+      - switch.turn_off: relay_0  # Dummy
+    preset:
+      - name: "Off"
+        default_target_temperature_high: ${target_high} ${temp_units}
+        default_target_temperature_low: ${target_low} ${temp_units}
+        mode: "off"
+      - name: Home
+        default_target_temperature_high: ${target_high} ${temp_units}
+        default_target_temperature_low: ${target_low} ${temp_units}
+        mode: "heat_cool"
+
+  #################################################################################################
+  ##### 2. Die eigentlichen Regler: zwei unabhaengige PID-Instanzen.                         #####
+  #####    internal: true -> nicht in HA sichtbar, Bedienung laeuft ueber thermostat_embedded #####
+  #################################################################################################
+  - platform: pid
+    id: pid_heat_embedded
+    name: PID Heizen
+    internal: true
+    sensor: temp_nspanel
+    default_target_temperature: 21  # wird nach Boot sofort vom Sync ueberschrieben
+    heat_output: pid_heat_pwm
+    control_parameters:
+      kp: ${pid_kp}
+      ki: ${pid_ki}
+      kd: ${pid_kd}
+      starting_integral_term: ${pid_starting_integral}
+      min_integral: 0.0
+      max_integral: 1.0
+      output_averaging_samples: 5
+    deadband_parameters:
+      threshold_high: ${pid_deadband}°C
+      threshold_low: -${pid_deadband}°C
+      kp_multiplier: 0.0
+      ki_multiplier: 0.05
+      kd_multiplier: 0.0
+      deadband_output_averaging_samples: 15
+
+  - platform: pid
+    id: pid_cool_embedded
+    name: PID Kuehlen
+    internal: true
+    sensor: temp_nspanel
+    default_target_temperature: 24  # wird nach Boot sofort vom Sync ueberschrieben
+    cool_output: pid_cool_pwm
+    control_parameters:
+      kp: ${pid_kp}
+      ki: ${pid_ki}
+      kd: ${pid_kd}
+      starting_integral_term: ${pid_starting_integral}
+      min_integral: 0.0
+      max_integral: 1.0
+      output_averaging_samples: 5
+    deadband_parameters:
+      threshold_high: ${pid_deadband}°C
+      threshold_low: -${pid_deadband}°C
+      kp_multiplier: 0.0
+      ki_multiplier: 0.05
+      kd_multiplier: 0.0
+      deadband_output_averaging_samples: 15
+
+#####################################################################################################
+##### 3. Slow-PWM-Ausgaenge: setzen die PID-Stellgroesse (0..100 %) in Ein/Aus-Zyklen der       #####
+#####    Panel-Relais um. Es werden die bestehenden Relais-Switches geschaltet (kein            #####
+#####    Pin-Konflikt, Zustand bleibt in HA sichtbar).                                          #####
+#####################################################################################################
+output:
+  - platform: slow_pwm
+    id: pid_heat_pwm
+    period: ${pwm_period}s
+    turn_on_action:
+      - switch.turn_on: relay_${heater_relay}
+    turn_off_action:
+      - switch.turn_off: relay_${heater_relay}
+
+  - platform: slow_pwm
+    id: pid_cool_pwm
+    period: ${pwm_period}s
+    turn_on_action:
+      - switch.turn_on: relay_${cooler_relay}
+    turn_off_action:
+      - switch.turn_off: relay_${cooler_relay}
+
+#####################################################################################################
+##### 4. Sync Thermostat -> PIDs: Modus und Sollwerte werden periodisch uebernommen.            #####
+#####    Aenderungserkennung verhindert unnoetige State-Publishes.                              #####
+#####    Alle Werte sind intern °C, daher keine °F-Umrechnung noetig.                           #####
+#####################################################################################################
+interval:
+  - interval: ${pid_sync_interval}s
+    then:
+      - lambda: |-
+          static float last_heat_target = NAN;
+          static float last_cool_target = NAN;
+          static int   last_mode = -1;
+
+          const auto mode = thermostat_embedded->mode;
+          const float t_low  = thermostat_embedded->target_temperature_low;
+          const float t_high = thermostat_embedded->target_temperature_high;
+
+          const bool heat_enabled = (mode == climate::CLIMATE_MODE_HEAT ||
+                                     mode == climate::CLIMATE_MODE_HEAT_COOL);
+          const bool cool_enabled = (mode == climate::CLIMATE_MODE_COOL ||
+                                     mode == climate::CLIMATE_MODE_HEAT_COOL);
+
+          const bool mode_changed = (int(mode) != last_mode);
+          const bool heat_changed = mode_changed ||
+              (heat_enabled && (isnan(last_heat_target) || fabsf(t_low - last_heat_target) > 0.01f));
+          const bool cool_changed = mode_changed ||
+              (cool_enabled && (isnan(last_cool_target) || fabsf(t_high - last_cool_target) > 0.01f));
+
+          if (heat_changed) {
+            if (heat_enabled && isnan(t_low)) {
+              ESP_LOGW("${TAG_ADDON_CLIMATE_PID}", "Sollwert Heizen ist NAN - Sync uebersprungen");
+            } else {
+              ESP_LOGD("${TAG_ADDON_CLIMATE_PID}", "Sync PID Heizen: enabled=%s target=%.2f°C",
+                       YESNO(heat_enabled), t_low);
+              auto call = pid_heat_embedded->make_call();
+              if (heat_enabled) {
+                call.set_mode(climate::CLIMATE_MODE_HEAT);
+                call.set_target_temperature(t_low);
+              } else {
+                call.set_mode(climate::CLIMATE_MODE_OFF);
+              }
+              call.perform();
+              last_heat_target = t_low;
+            }
+          }
+
+          if (cool_changed) {
+            if (cool_enabled && isnan(t_high)) {
+              ESP_LOGW("${TAG_ADDON_CLIMATE_PID}", "Sollwert Kuehlen ist NAN - Sync uebersprungen");
+            } else {
+              ESP_LOGD("${TAG_ADDON_CLIMATE_PID}", "Sync PID Kuehlen: enabled=%s target=%.2f°C",
+                       YESNO(cool_enabled), t_high);
+              auto call = pid_cool_embedded->make_call();
+              if (cool_enabled) {
+                call.set_mode(climate::CLIMATE_MODE_COOL);
+                call.set_target_temperature(t_high);
+              } else {
+                call.set_mode(climate::CLIMATE_MODE_OFF);
+              }
+              call.perform();
+              last_cool_target = t_high;
+            }
+          }
+
+          last_mode = int(mode);
+
+#####################################################################################################
+##### 5. Diagnose-Sensoren: Stellgroessen der PIDs in Home Assistant (fuers Tuning).            #####
+#####################################################################################################
+sensor:
+  - platform: pid
+    climate_id: pid_heat_embedded
+    name: PID Heizen Stellgroesse
+    type: HEAT
+    entity_category: diagnostic
+  - platform: pid
+    climate_id: pid_cool_embedded
+    name: PID Kuehlen Stellgroesse
+    type: COOL
+    entity_category: diagnostic
+
+#####################################################################################################
+##### EINBINDUNG - Beispiel fuer deine Panel-YAML:                                              #####
+#####                                                                                           #####
+##### substitutions:                                                                            #####
+#####   device_name: "mein-nspanel"                                                             #####
+#####   friendly_name: "Mein NSPanel"                                                           #####
+#####   wifi_ssid: !secret wifi_ssid                                                            #####
+#####   wifi_password: !secret wifi_password                                                    #####
+#####   heater_relay: "1"                                                                       #####
+#####   cooler_relay: "2"                                                                       #####
+#####   ## Optional: PID-Tuning                                                                 #####
+#####   # pid_kp: "0.3"                                                                         #####
+#####   # pid_ki: "0.00003"                                                                     #####
+#####   # pwm_period: "1200"                                                                    #####
+#####                                                                                           #####
+#####   ## WICHTIG fuer autonomen Betrieb: Standard-Neustart bei Verbindungs-                  #####
+#####   ## verlust deaktivieren (sonst Reboot alle 15 min ohne HA/WLAN, dabei                  #####
+#####   ## gehen I-Anteil und PWM-Phase verloren):                                             #####
+##### api:                                                                                     #####
+#####   reboot_timeout: 0s                                                                     #####
+##### wifi:                                                                                    #####
+#####   reboot_timeout: 0s                                                                     #####
+#####                                                                                          #####
+##### packages:                                                                                 #####
+#####   remote_package:                                                                         #####
+#####     url: https://github.com/edwardtfn/NSPanel-Easy                                        #####
+#####     ref: main                                                                             #####
+#####     refresh: 300s                                                                         #####
+#####     files:                                                                                #####
+#####       - nspanel_esphome.yaml                            # Core                            #####
+#####       - esphome/nspanel_esphome_addon_climate_base.yaml # Climate-Basis (Pflicht!)        #####
+#####       # KEINE der originalen climate_heat/cool/dual-Dateien laden!                        #####
+#####   climate_pid_dual: !include nspanel_esphome_addon_climate_pid_dual.yaml  # diese Datei   #####
+#####################################################################################################
+...
