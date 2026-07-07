@@ -15,9 +15,9 @@
 #####     Kuehlen. Der Modus (off/heat/cool/heat_cool) wird ebenfalls uebernommen.              #####
 #####   - Die Relais werden ueber slow_pwm moduliert (Zykluszeit ${pwm_period}s).               #####
 #####                                                                                           #####
-##### Einbindung: siehe Beispiel am Ende der Datei. WICHTIG: Zusaetzlich muss                   #####
-##### esphome/nspanel_esphome_addon_climate_base.yaml im remote_package geladen werden,         #####
-##### und die originalen climate_heat/cool/dual-Dateien duerfen NICHT geladen sein.             #####
+##### Einbindung: siehe Beispiel am Ende der Datei. Diese Datei laedt die Climate-Basis        #####
+##### selbst nach (wie das originale Dual-Add-on). WICHTIG: Die originalen                      #####
+##### climate_heat/cool/dual-Dateien duerfen NICHT gleichzeitig geladen sein.                   #####
 #####################################################################################################
 ---
 substitutions:
@@ -250,24 +250,29 @@ sensor:
 #####   # pid_kp: "0.3"                                                                         #####
 #####   # pid_ki: "0.00003"                                                                     #####
 #####   # pwm_period: "1200"                                                                    #####
+#####   # pid_starting_integral: "0.0"                                                          #####
 #####                                                                                           #####
-#####   ## WICHTIG fuer autonomen Betrieb: Standard-Neustart bei Verbindungs-                  #####
-#####   ## verlust deaktivieren (sonst Reboot alle 15 min ohne HA/WLAN, dabei                  #####
-#####   ## gehen I-Anteil und PWM-Phase verloren):                                             #####
-##### api:                                                                                     #####
-#####   reboot_timeout: 0s                                                                     #####
-##### wifi:                                                                                    #####
-#####   reboot_timeout: 0s                                                                     #####
-#####                                                                                          #####
+##### ## WICHTIG fuer autonomen Betrieb: Standard-Neustart bei Verbindungsverlust               #####
+##### ## deaktivieren (sonst Reboot alle 15 min ohne HA/WLAN, dabei gehen                       #####
+##### ## I-Anteil und PWM-Phase verloren):                                                      #####
+##### api:                                                                                      #####
+#####   reboot_timeout: 0s                                                                      #####
+##### wifi:                                                                                     #####
+#####   reboot_timeout: 0s                                                                      #####
+#####                                                                                           #####
 ##### packages:                                                                                 #####
 #####   remote_package:                                                                         #####
-#####     url: https://github.com/edwardtfn/NSPanel-Easy                                        #####
+#####     url: https://github.com/froido/NSPanel-Easy-PID                                       #####
 #####     ref: main                                                                             #####
 #####     refresh: 300s                                                                         #####
 #####     files:                                                                                #####
 #####       - nspanel_esphome.yaml                            # Core                            #####
-#####       - esphome/nspanel_esphome_addon_climate_base.yaml # Climate-Basis (Pflicht!)        #####
-#####       # KEINE der originalen climate_heat/cool/dual-Dateien laden!                        #####
-#####   climate_pid_dual: !include nspanel_esphome_addon_climate_pid_dual.yaml  # diese Datei   #####
+#####       - nspanel_esphome_addon_climate_pid_dual.yaml     # dieses Add-on (Root-Wrapper)    #####
+#####       # KEINE der originalen climate_heat/cool/dual-Dateien laden und die                 #####
+#####       # climate_base NICHT zusaetzlich laden - sie wird unten bereits eingebunden!        #####
 #####################################################################################################
+
+# Climate-Basis nachladen (gleicher Mechanismus wie im originalen Dual-Add-on).
+packages:
+  climate_base_package: !include nspanel_esphome_addon_climate_base.yaml
 ...
