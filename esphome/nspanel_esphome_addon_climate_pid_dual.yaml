@@ -289,6 +289,47 @@ number:
     on_value:
       - script.execute: apply_pid_tuning
 
+  - platform: template
+    id: pid_tuning_pwm_period
+    name: PID PWM Periode
+    entity_category: config
+    icon: mdi:sine-wave
+    unit_of_measurement: s
+    min_value: 300
+    max_value: 3600
+    step: 60
+    initial_value: ${pwm_period}
+    restore_value: true
+    optimistic: true
+    on_value:
+      - lambda: |-
+          if (isnan(x) || x < 60.0f) return;
+          const uint32_t ms = (uint32_t) (x * 1000.0f);
+          ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "PWM-Periode uebernommen: %.0fs", x);
+          pid_heat_pwm->set_period(ms);
+          pid_cool_pwm->set_period(ms);
+
+  - platform: template
+    id: pid_tuning_deadband
+    name: PID Totzone
+    entity_category: config
+    icon: mdi:arrow-expand-vertical
+    unit_of_measurement: "°C"
+    min_value: 0.0
+    max_value: 1.0
+    step: 0.05
+    initial_value: ${pid_deadband}
+    restore_value: true
+    optimistic: true
+    on_value:
+      - lambda: |-
+          if (isnan(x) || x < 0.0f) return;
+          ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "Totzone uebernommen: +/-%.2fK", x);
+          pid_heat_embedded->set_threshold_high(x);
+          pid_heat_embedded->set_threshold_low(-x);
+          pid_cool_embedded->set_threshold_high(x);
+          pid_cool_embedded->set_threshold_low(-x);
+
 script:
   - id: apply_pid_tuning
     mode: restart
