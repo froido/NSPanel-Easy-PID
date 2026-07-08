@@ -42,6 +42,12 @@ substitutions:
   pid_starting_integral: "0.0"
   # Sync-Intervall Thermostat -> PID in Sekunden
   pid_sync_interval: "10"
+  # Nachstellzeit Tn in MINUTEN - Startwert fuer die HA-einstellbare Nummer.
+  # Hinweis: pid_kp/pid_tn sind nur noch SEED-Werte fuer den ersten Boot; danach
+  # sind die number-Entitaeten in HA die fuehrende Quelle (restore_value).
+  # pid_ki oben bleibt der Compile-Zeit-Default, wird aber beim Boot vom
+  # Tuning-Script ueberschrieben (ki = kp / (Tn * 60)).
+  pid_tn: "180"
   TAG_ADDON_CLIMATE_PID: nspanel.addon.climate.pid
 
 esphome:
@@ -235,6 +241,82 @@ sensor:
     name: PID Kuehlen Stellgroesse
     type: COOL
     entity_category: diagnostic
+  - platform: pid
+    climate_id: pid_heat_embedded
+    name: PID Heizen I-Anteil
+    type: INTEGRAL
+    entity_category: diagnostic
+  - platform: pid
+    climate_id: pid_cool_embedded
+    name: PID Kuehlen I-Anteil
+    type: INTEGRAL
+    entity_category: diagnostic
+
+#####################################################################################################
+##### 6. Live-Tuning aus Home Assistant: kp und Tn als einstellbare Nummern.                    #####
+#####    Wirken auf BEIDE Regler (Heizen und Kuehlen). Aenderungen werden sofort per           #####
+#####    climate.pid.set_control_parameters uebernommen - kein Neuflashen noetig.               #####
+#####    Nach dem ersten Boot sind diese Nummern die fuehrende Quelle (restore_value);          #####
+#####    die Substitutions pid_kp/pid_tn setzen nur den Startwert.                              #####
+#####################################################################################################
+number:
+  - platform: template
+    id: pid_tuning_kp
+    name: PID kp
+    entity_category: config
+    icon: mdi:tune-vertical
+    min_value: 0.05
+    max_value: 1.0
+    step: 0.05
+    initial_value: ${pid_kp}
+    restore_value: true
+    optimistic: true
+    on_value:
+      - script.execute: apply_pid_tuning
+
+  - platform: template
+    id: pid_tuning_tn
+    name: PID Tn
+    entity_category: config
+    icon: mdi:timer-cog-outline
+    unit_of_measurement: min
+    min_value: 10
+    max_value: 600
+    step: 5
+    initial_value: ${pid_tn}
+    restore_value: true
+    optimistic: true
+    on_value:
+      - script.execute: apply_pid_tuning
+
+script:
+  - id: apply_pid_tuning
+    mode: restart
+    then:
+      - lambda: |-
+          ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "Tuning uebernommen: kp=%.3f Tn=%.0fmin",
+                   pid_tuning_kp->state, pid_tuning_tn->state);
+      - climate.pid.set_control_parameters:
+          id: pid_heat_embedded
+          kp: !lambda "return pid_tuning_kp->state;"
+          ki: !lambda |-
+            const float tn_s = pid_tuning_tn->state * 60.0f;
+            return (tn_s > 0.0f) ? pid_tuning_kp->state / tn_s : 0.0f;
+      - climate.pid.set_control_parameters:
+          id: pid_cool_embedded
+          kp: !lambda "return pid_tuning_kp->state;"
+          ki: !lambda |-
+            const float tn_s = pid_tuning_tn->state * 60.0f;
+            return (tn_s > 0.0f) ? pid_tuning_kp->state / tn_s : 0.0f;
+
+button:
+  - platform: template
+    name: PID I-Anteil zuruecksetzen
+    entity_category: config
+    icon: mdi:restore
+    on_press:
+      - climate.pid.reset_integral_term: pid_heat_embedded
+      - climate.pid.reset_integral_term: pid_cool_embedded
 
 #####################################################################################################
 ##### EINBINDUNG - Beispiel fuer deine Panel-YAML:                                              #####
