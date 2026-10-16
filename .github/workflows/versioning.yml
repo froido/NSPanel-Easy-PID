@@ -1,12 +1,12 @@
 # This GitHub Actions workflow handles version bumping, pre-built firmware, releases, and tag updates.
 #
-# Triggered by merging a PR to the main branch, it automatically:
+# Triggered by any push to the main branch (normally a PR merge), it automatically:
 # 1. Bumps the CalVer version (YYYY.M.seq)
 # 2. Calculates the minimum upstream version (current month minus 2, YYYY.M.0)
 # 3. Resolves the "next" sentinel in min_blueprint_version, if set
 # 4. Updates min_esphome_compiler_version and blueprint homeassistant.min_version
 # 5. Updates the bug report template with current version placeholders
-# 6. Updates the blueprint version and display name
+# 6. Updates the blueprint version and display name, and resolves the "next" sentinel in its min_esphome_version
 # 7. Commits all version changes and pushes to main
 # 8. Builds pre-built firmware binaries in parallel (nspanel-easy, wall-display)
 # 9. Commits the compiled binaries, checksums, and manifests to main
@@ -14,16 +14,24 @@
 # 11. Updates the stable and latest floating tags
 # 12. Announces the release on Discord
 #
-# The workflow skips execution if the merge commit message contains
-# [skip-versioning] to prevent loops from its own version bump commits.
+# The workflow skips execution if the head commit message contains
+# [skip-versioning], preventing loops caused by its own version bump and
+# pre-built firmware commits, both of which are pushed back to main.
+#
+# Note: this workflow intentionally listens to `push` and not to
+# `pull_request: closed`. For a pull request whose head branch lives in a fork,
+# GitHub downgrades GITHUB_TOKEN to read-only and withholds repository secrets,
+# regardless of the `permissions:` block declared here. That makes every push,
+# tag and release step below fail with HTTP 403. A `push` event always runs in
+# the base repository context, with the declared permissions and full access to
+# secrets, so collaborator PRs merged directly into main behave exactly like
+# PRs merged from a local branch.
 
 ---
 name: Version, Release & Tags
 
 on:  # yamllint disable-line rule:truthy
-  pull_request:
-    types:
-      - closed
+  push:
     branches:
       - main
     paths-ignore:
@@ -36,7 +44,10 @@ jobs:
   # ---------------------------------------------------------------------------
   bump:
     name: Bump version
-    if: github.event.pull_request.merged == true
+    # Cheap pre-filter: avoids spinning up a runner for the workflow's own
+    # commits. The step-level check below is kept as a second line of defence,
+    # since head_commit is only populated for push events.
+    if: ${{ !contains(github.event.head_commit.message, '[skip-versioning]') }}
     runs-on: ubuntu-latest
     concurrency:
       group: version-and-release
@@ -81,7 +92,7 @@ jobs:
 
       - name: Set up yq
         if: steps.skip_check.outputs.skip == 'false'
-        uses: mikefarah/yq@v4.53.3
+        uses: mikefarah/yq@v4.54.1
 
       - name: Get PR information
         id: pr_info
@@ -89,8 +100,20 @@ jobs:
         uses: actions/github-script@v9
         with:
           script: |
+            // On a push event there is no pull_request payload, so the PR that
+            // introduced this commit has to be resolved through the API.
+            // Direct pushes to main resolve to no PR and fall back below.
             try {
-              const pr = context.payload.pull_request;
+              const { data: prs } =
+                await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  commit_sha: context.sha
+                });
+              const pr = prs.find(p => p.merged_at) || prs[0];
+              if (!pr) {
+                throw new Error(`No pull request associated with ${context.sha}`);
+              }
               return {
                 title: pr.title,
                 body: pr.body || 'No description provided',
@@ -144,12 +167,12 @@ jobs:
           VERSION_YEAR=$(echo "$CURRENT_VERSION" | awk -F. '{print $1}')
           VERSION_MONTH=$(echo "$CURRENT_VERSION" | awk -F. '{print $2}')
 
-          # Increment sequence or reset for a new month
+          # Increment sequence or reset to 0 for a new month (first release is YYYY.M.0)
           if [[ "$CURRENT_YEAR" == "$VERSION_YEAR" \
              && "$CURRENT_MONTH" == "$VERSION_MONTH" ]]; then
             NEXT_SEQ=$((CURRENT_SEQ + 1))
           else
-            NEXT_SEQ=1
+            NEXT_SEQ=0
           fi
 
           NEXT_VERSION="${CURRENT_YEAR}.${CURRENT_MONTH}.${NEXT_SEQ}"
@@ -283,6 +306,23 @@ jobs:
           if ! grep -q "^  blueprint_version: ${NEW_VERSION}$" "$BLUEPRINT"; then
             echo "ERROR: Failed to update blueprint_version in $BLUEPRINT"
             exit 1
+          fi
+
+          # If min_esphome_version is set to the sentinel "next", replace it with the
+          # actual version being released, tying the Blueprint's firmware requirement
+          # to this exact release. Otherwise the existing requirement is kept.
+          if grep -qE '^  min_esphome_version: next$' "$BLUEPRINT"; then
+            sed -i \
+              "s/^  min_esphome_version: .*/  min_esphome_version: ${NEW_VERSION}/" \
+              "$BLUEPRINT"
+            if ! grep -q "^  min_esphome_version: ${NEW_VERSION}$" "$BLUEPRINT"; then
+              echo "ERROR: Failed to resolve min_esphome_version sentinel in $BLUEPRINT"
+              exit 1
+            fi
+            echo "Resolved min_esphome_version sentinel to ${NEW_VERSION}"
+          else
+            MIN_ESPHOME=$(grep "^  min_esphome_version:" "$BLUEPRINT" | awk '{print $2}')
+            echo "min_esphome_version is already set to ${MIN_ESPHOME}, no sentinel to resolve"
           fi
 
           # Update the minimum Home Assistant version required to run this blueprint,

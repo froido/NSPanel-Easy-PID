@@ -29,16 +29,17 @@ struct SystemFlags {
   uint16_t display_settings_received : 1;  ///< All display settings received
 
   // Runtime operation flags
-  uint16_t tft_upload_active : 1;  ///< TFT firmware upload in progress
-  uint16_t ota_in_progress : 1;    ///< Over-the-air update active
-  uint16_t display_sleep : 1;      ///< Display is in sleep mode
+  uint16_t tft_upload_active : 1;       ///< TFT firmware upload in progress
+  uint16_t ota_in_progress : 1;         ///< Over-the-air update active
+  uint16_t display_sleep : 1;           ///< Display is in sleep mode
+  uint16_t display_resync_pending : 1;  ///< Display restarted; repaint on next page entry
 
   // Baud rate flags
   uint16_t baud_fallback_active : 1;  ///< UART is operating at non-primary rate (detected via scan)
   uint16_t baud_scan_success : 1;     ///< Last baud rate scan found a responsive rate
 
   // Reserved flags
-  uint16_t reserved : 4;
+  uint16_t reserved : 3;
 
   // Default constructor - all flags start as false (zero-initialized)
   SystemFlags()
@@ -179,12 +180,51 @@ inline void feed_wdt_delay(uint32_t ms = 5) {
 extern std::string cached_device_name;
 
 /**
+ * @brief API version (MAJOR.MINOR) provided by this firmware.
+ *
+ * Set from the `api_version` substitution during boot (see nspanel_esphome_version.yaml).
+ * While set, fire_ha_event() adds it to every event, so the Blueprint can check it before calling any action.
+ */
+extern const char *firmware_api_version;
+
+/**
+ * @brief How a button bound to an unavailable entity is rendered.
+ *
+ * Applies to every per-entity button surface: the button pages, the climate
+ * page custom buttons and the home page custom buttons. Stored as a single
+ * byte so it can be pushed from the blueprint as a plain integer.
+ *
+ * Only genuinely unavailable entities are affected. An entity reporting
+ * "unknown" is left alone: a `button` or `script` entity that has never run
+ * reports "unknown" for legitimate reasons and is still actionable.
+ */
+enum class UnavailableBehavior : uint8_t {
+  RENDER_AS_OFF = 0,  ///< Legacy behaviour: indistinguishable from an off entity
+  INDICATE = 1,       ///< Forced off, icon and label greyed, click ignored
+  HIDE = 2,           ///< Components hidden, click unreachable
+};
+
+/// @brief Active unavailable-entity behaviour, pushed by the blueprint.
+extern UnavailableBehavior unavailable_behavior;
+
+/**
+ * @brief Set when the behaviour changes away from HIDE, cleared on page change.
+ *
+ * Button page renders only write visibility under HIDE. A button hidden on the
+ * page currently shown would otherwise stay hidden after switching to another
+ * behaviour, since the refresh that follows is not a page entry and nothing
+ * restores visibility. While set, refreshes restore it as well. A page change
+ * resets visibility to the TFT defaults, so the flag is no longer needed after it.
+ */
+extern bool unavailable_unhide_pending;
+
+/**
  * @brief Fire a Home Assistant event for NSPanel HA Blueprint
  *
- * Automatically adds device_name and type to the event data.
+ * Automatically adds device_name, type and, when available, api_version to the event data.
  *
  * @param type Event type (e.g., "button_click", "page_changed", "boot")
- * @param data Additional event data (device_name and type added automatically)
+ * @param data Additional event data (device_name, type and api_version added automatically)
  *
  * @note The event name is automatically set to "esphome.nspanel_easy"
  * @note Call init_device_name_cache() during boot before using this function

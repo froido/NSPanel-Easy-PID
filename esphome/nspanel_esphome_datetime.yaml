@@ -18,9 +18,8 @@ substitutions:
 
 
 esphome:
-  platformio_options:
-    build_flags:
-      - -D NSPANEL_EASY_DATETIME
+  build_flags:
+    - -D NSPANEL_EASY_DATETIME
 
 script:
   - id: new_minute
@@ -28,12 +27,7 @@ script:
     then:
       - lambda: |-
           refresh_datetime->execute();
-          refresh_hardware_buttons_bars->execute(3);
-          refresh_wifi_icon->execute();
-
-  - id: !extend page_home
-    then:
-      - script.execute: refresh_datetime
+          refresh_wifi_icon->execute(false);
 
   - id: refresh_datetime
     mode: restart
@@ -61,10 +55,11 @@ script:
                                                             : "${LOCALIZATION[LANG].meridiem.pm}";
           const bool has_meridiem = (time_format_str.find("%p") != std::string::npos);
 
-          if (id(screensaver_display_time) and current_page_id == get_page_id("screensaver")) {
+          if (id(screensaver_display_time) && current_page_id == get_page_id("screensaver")) {
             std::string time_format_str_sleep = time_format_str;
             nspanel_easy::replace_all(time_format_str_sleep, "%p", meridiem_text);
-            if (display_model->current_option() == "${DISPLAY_MODES.US.TEXT}") {
+            if (id(screensaver_display_time_font) == 12 &&
+                display_model->current_option() == "${DISPLAY_MODES.US.TEXT}") {
               nspanel_easy::replace_all(time_format_str_sleep, ":", "\\r");
               nspanel_easy::replace_all(time_format_str_sleep, " ", "\\r");
             }
@@ -163,6 +158,10 @@ script:
             return;
           }
           disp1->set_component_text(component.c_str(), date_string.c_str());
+
+  - id: !extend resync_display
+    then:
+      - script.execute: refresh_datetime
 
   - id: !extend stop_all
     then:

@@ -10,9 +10,8 @@ substitutions:
   TAG_ADDON_DISPLAY_LIGHT: nspanel.addon.display_light
 
 esphome:
-  platformio_options:
-    build_flags:
-      - -D NSPANEL_EASY_ADDON_DISPLAY_LIGHT
+  build_flags:
+    - -D NSPANEL_EASY_ADDON_DISPLAY_LIGHT
 
 light:
   # Add the display as a light in Home Assistant
@@ -32,7 +31,7 @@ light:
               return;
             }
             // Delegate to wakeup script:
-            // handles wake-page navigation (including climate and theme_pending_apply special cases) and timer reset.
+            // handles wake-page navigation (including the climate special case) and timer reset.
             wakeup->execute(true);
     on_turn_off:
       then:

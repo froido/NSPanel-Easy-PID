@@ -42,17 +42,23 @@ Optional packages that extend the base firmware:
 
 - [Add-on: Upload TFT](addon_upload_tft.md) — automatic and manual TFT updates,
   model selection, and custom TFT hosting.
+- [Add-on: Bluetooth Proxy](addon_bluetooth_proxy.md) — extend Home Assistant's
+  Bluetooth range and track BLE devices through the panel.
 - [Add-on: Climate](addon_climate.md) — use the panel's relays as a local
   thermostat (heater, cooler, or both) that keeps working without Wi-Fi.
 - [Add-on: Cover](addon_cover.md) — drive a cover motor from the panel's
   relays.
 - [Add-on: Display Light](addon_display_light.md) — expose the display
   brightness as a Home Assistant light entity.
+- [Add-on: ESPectre](addon_espectre.md) — use the panel's Wi-Fi signal as a
+  motion sensor that wakes the display.
 
 ## Reference
 
 - [API](api.md) — custom ESPHome actions (`upload_tft`, `notification_show`,
   `rtttl_play`, `qrcode`, and more) with parameters and examples.
+- [API Subscriptions](api_subscribe.md) — drive panel components directly from
+  Home Assistant entity states, without an automation running per state change.
 - [Alarm Control Panel](alarm.md) — configure and secure alarm control from
   the panel.
 - [Customization](customization.md) — advanced examples: API encryption, custom

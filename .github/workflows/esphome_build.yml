@@ -79,7 +79,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup Python
-        uses: actions/setup-python@v6.2.0
+        uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.11"
 
@@ -108,6 +108,8 @@ jobs:
             yaml-file: .test/esphome_idf_climate_cool_bluetooth_proxy.yaml
           - name: Bluetooth Proxy
             yaml-file: .test/esphome_idf_bluetooth_proxy.yaml
+          - name: ESPectre
+            yaml-file: .test/esphome_idf_espectre.yaml
           - name: BLE Tracker
             yaml-file: .test/esphome_idf_ble_tracker.yaml
           - name: Basic (Arduino)
@@ -132,7 +134,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
       - name: Build firmware
-        uses: esphome/build-action@v7.3.0
+        uses: esphome/build-action@v8.1.0
         with:
           yaml-file: ${{ matrix.firmware.yaml-file }}
           substitutions: |
@@ -158,6 +160,8 @@ jobs:
             yaml-file: .test/esphome_idf_climate_cool_bluetooth_proxy.yaml
           - name: Bluetooth Proxy
             yaml-file: .test/esphome_idf_bluetooth_proxy.yaml
+          - name: ESPectre
+            yaml-file: .test/esphome_idf_espectre.yaml
           - name: BLE Tracker
             yaml-file: .test/esphome_idf_ble_tracker.yaml
           - name: Basic (Arduino)
@@ -182,7 +186,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
       - name: Build firmware
-        uses: esphome/build-action@v7.3.0
+        uses: esphome/build-action@v8.1.0
         with:
           yaml-file: ${{ matrix.firmware.yaml-file }}
           version: dev
@@ -210,7 +214,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
       - name: Build firmware
-        uses: esphome/build-action@v7.3.0
+        uses: esphome/build-action@v8.1.0
         with:
           yaml-file: ${{ matrix.firmware.yaml-file }}
           substitutions: |
@@ -257,7 +261,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
       - name: Build firmware
-        uses: esphome/build-action@v7.3.0
+        uses: esphome/build-action@v8.1.0
         with:
           yaml-file: ${{ matrix.firmware.yaml-file }}
           version: dev

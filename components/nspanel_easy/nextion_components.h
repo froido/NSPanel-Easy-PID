@@ -2,11 +2,49 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
-#include <cstdint>
+
+namespace esphome::nextion {
+class Nextion;
+}  // namespace esphome::nextion
+
+namespace esphome::text_sensor {
+class TextSensor;
+}  // namespace esphome::text_sensor
 
 namespace esphome::nspanel_easy {
+
+/**
+ * @brief Display used by C++ outside a lambda.
+ *
+ * ESPHome declares component pointers with internal linkage in main.cpp, so
+ * they cannot be reached with extern. The pointer is assigned once from the
+ * component's to_code().
+ */
+extern esphome::nextion::Nextion *nextion_display;
+
+/**
+ * @brief Sensor holding the entity_id currently shown on a detailed page.
+ *
+ * Empty whenever no detailed page is open, since it is cleared on every page
+ * change. Assigned once from the component's to_code(), for the same reason as
+ * nextion_display.
+ */
+extern esphome::text_sensor::TextSensor *detailed_entity_sensor;
+
+/**
+ * @brief Decimal separator used when formatting numbers, e.g. "." or ",".
+ *
+ * Points at the live value of the ESPHome global that owns it, so it reflects
+ * the current setting including the value restored from NVS at boot. Null until
+ * the component's to_code() has handed it over.
+ */
+extern const std::string *decimal_separator_str;
+
+/// @brief Separator between a number and its unit; often empty.
+extern const std::string *units_separator_str;
 
 /**
  * @struct HMIComponent

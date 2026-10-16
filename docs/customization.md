@@ -20,6 +20,7 @@ Table of contents:
   - [Enforce time zone](#enforce-time-zone)
   - [Compiling ESPHome on lower powered machines](#compiling-esphome-on-lower-powered-machines)
   - [Sleep & Wake-up buttons](#sleep--wake-up-buttons)
+  - [Wake-up with hardware buttons](#wake-up-with-hardware-buttons)
   - [Set display as a light](#set-display-as-a-light) - DEPRECATED
   - [Current brightness sensor](#current-brightness-sensor)
   - [Scheduled actions](#scheduled-actions)
@@ -248,6 +249,26 @@ api:
   reboot_timeout: 15min
 ```
 
+### Feedback when Home Assistant is unavailable
+
+While Home Assistant is disconnected, the panel does not open pages that need it:
+
+- On the home page, the Wi-Fi icon blinks to point at the cause.
+- On any other page that needs Home Assistant, the panel returns to the home page.
+- When waking up, the panel opens the home page if the selected **Wake-up page** needs Home Assistant.
+
+The pages that work without Home Assistant are the home page, settings, QR code, and the climate page when it shows the embedded thermostat.
+
+You can also play a tone when this happens. It is disabled by default:
+
+```yaml
+substitutions:
+  # Play a tone when something requiring Home Assistant is used while it is disconnected
+  page_unavailable_sound: true
+  # Optional: replace the default tone (RTTTL)
+  tone_page_unavailable: "unavailable:d=16,o=5,b=160:a5,e5"
+```
+
 ### Manual IP
 
 Set IP address manually.
@@ -427,6 +448,35 @@ button:
             id: wakeup
             reset_timer: true
 ```
+
+### Wake-up with hardware buttons
+
+By default, pressing a hardware button while the display is sleeping only sends the button event to Home Assistant,
+and the display remains on the screensaver. To also wake the display, add the following substitution:
+
+```yaml
+substitutions:
+  wakeup_with_button_press: true  # Wake the display when a hardware button is pressed
+```
+
+When enabled, a short or long click on either hardware button while the display is sleeping wakes it on the page
+selected in "Wake-up page" and resets the sleep, dimming and page timers, as a touch on the screen would.
+The button event is still sent to Home Assistant as usual.
+
+This runs locally on the panel, so it neither requires the `wake_up` API action nor a Home Assistant automation.
+
+To wake the display at "Display Brightness Dimdown" instead of the regular "Display Brightness", also add:
+
+```yaml
+substitutions:
+  wakeup_with_button_press: true         # Wake the display when a hardware button is pressed
+  wakeup_with_button_press_dimmed: true  # ... at the dimmed brightness
+```
+
+With `wakeup_with_button_press_dimmed` enabled, the display is held at the dimmed brightness after a hardware button
+wake-up, including on page changes. Further hardware button presses on a dimmed display only reset the timers, without
+raising the brightness. A touch on the screen restores the regular brightness, and the hold is released when the display
+goes back to sleep.
 
 ### Set display as a light
 

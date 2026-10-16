@@ -14,6 +14,12 @@ substitutions:
   TAG_API: nspanel.api
   EVENT_NAME: esphome.nspanel_easy
 
+
+packages:
+  # yamllint disable rule:colons
+  api_subscribe: !include nspanel_esphome_api_subscribe.yaml
+  # yamllint enable rule:colons
+
 api:
   id: api_server
   homeassistant_services: true
@@ -93,6 +99,19 @@ api:
               return;
             }
 
+            // Title and icon for the next entity details page: [entity, title, icon].
+            // Sent by the Blueprint right before `entity_details_show`, so it is stored here,
+            // synchronously, instead of in the queued script: a busy queue could otherwise
+            // store it after the page change that reports it back.
+            if (page == "mem" && id == "details_overlap") {
+              details_overlap.entity = txt_list[0];
+              details_overlap.title = (txt_list.size() > 1) ? txt_list[1] : "";
+              details_overlap.icon = (txt_list.size() > 2) ? txt_list[2] : "";
+              ESP_LOGV("${TAG_API}", "  details_overlap: '%s', '%s', '%s'", details_overlap.entity.c_str(),
+                       details_overlap.title.c_str(), details_overlap.icon.c_str());
+              return;
+            }  // if (page == "mem" && id == "details_overlap")
+
             action_component_text_list->execute(
               page.c_str(),
               id.c_str(),
@@ -146,6 +165,10 @@ api:
             else if (entity_id.domain == "input_boolean")       entity_id.domain = "switch";
             else if (entity_id.domain == "input_button")        entity_id.domain = "button";
             else if (entity_id.domain == "input_select")        entity_id.domain = "select";
+            else if (entity_id.domain == "lawn_mower")          entity_id.domain = "vacuum";
+            // Humidifiers (and dehumidifiers) share the water heater page: one setpoint, a mode list
+            // and on/off. The Blueprint renders humidity on it and translates the page's actions.
+            else if (entity_id.domain == "humidifier")          entity_id.domain = "water_heater";
             #ifdef NSPANEL_EASY_ADDON_CLIMATE_BASE
             if (entity == "embedded_climate")                   entity_id.domain = "climate";
             #endif  // NSPANEL_EASY_ADDON_CLIMATE_BASE
@@ -154,16 +177,35 @@ api:
                 or entity == "embedded_climate"
                 #endif  // NSPANEL_EASY_ADDON_CLIMATE_BASE
                 ) {
+              const uint8_t details_page_id = get_page_id(entity_id.domain.c_str());
+              const bool entity_changed = (detailed_entity->state != entity);
               detailed_entity->publish_state(entity);
-              goto_page->execute(get_page_id(entity_id.domain.c_str()));
-              disp1->send_command_printf("back_page_id=%" PRIu8, get_page_id(back_page.c_str()));
+              if (details_page_id != UINT8_MAX and details_page_id == current_page_id and entity_changed) {
+                // `goto_page` ignores requests for the current page, so reload it directly.
+                // The reload fires `on_page`, which reports the new entity to the Blueprint.
+                ESP_LOGD("${TAG_API}", "Reload page '%s' for '%s'", page_names[details_page_id], entity.c_str());
+                disp1->goto_page(details_page_id);
+              } else {
+                goto_page->execute(details_page_id);
+              }  // if (same page, different entity)
+              // An empty `back_page` means "keep the current return target".
+              // An unknown page name would resolve to UINT8_MAX, which is not a valid
+              // page and would break the back button, so fall back to the home page.
+              if (!back_page.empty()) {
+                uint8_t back_page_id = get_page_id(back_page.c_str());
+                if (back_page_id == UINT8_MAX) {
+                  ESP_LOGW("${TAG_API}", "Unknown back_page '%s', falling back to home", back_page.c_str());
+                  back_page_id = home_page_id;
+                }
+                disp1->send_command_printf("back_page_id=%" PRIu8, back_page_id);
+              }
             }
 
     - action: icon  # Updates icon, color, and visibility for display components
       variables:
         page: string       # Page name for visibility control (mandatory).
         id: string         # Identifier of the component.
-        icon: string       # Icon codepoint, e.g., "/uE6E8" for `mdi:lightbulb-on-outline`.
+        icon: string       # Icon codepoint, e.g., "\uE6E8" for `mdi:lightbulb-on-outline`.
         icon_color: int[]  # RGB color array for the icon, e.g., [0, 255, 0] for green.
         visible: bool      # Set to `true` for visible or `false` for hidden.
       then:
@@ -180,11 +222,11 @@ api:
             ESP_LOGV("${TAG_API}", "  page: '%s'", page.c_str());
 
             const bool is_chip_target = (page == "chips");
-            const bool is_home_page = (page == "home");
-            const bool is_current_page = (page == current_page->state) || (is_chip_target && is_chips_page);
+            const bool target_is_home_page = (page == "home");
+            const bool target_is_current_page = (page == current_page->state) || is_chip_target;
 
             // Only process if home page (global) OR current page
-            if (!is_home_page && !is_current_page && !is_current_page) {
+            if (!target_is_home_page && !target_is_current_page) {
               ESP_LOGV("${TAG_API}", "Skipping: Not current page");
               return;
             }
@@ -209,14 +251,23 @@ api:
               icon.c_str(),
               icon_color.size() == 3 ? rgbTo565(icon_color) : -1,
               visible,
-              is_home_page,
-              is_current_page
+              target_is_home_page,
+              target_is_current_page
             );
 
+display:
+  - id: !extend disp1
+    on_custom_binary_sensor:
+      then:
+        - lambda: |-
+            // Sent by the display when something requiring Home Assistant is used while it is not connected
+            if (key != "api_unavailable" or !value) return;
+            ESP_LOGW("${TAG_API}", "Home Assistant needed on page '%s'", page_names[current_page_id]);
+            api_unavailable_feedback->execute();
+
 esphome:
-  platformio_options:
-    build_flags:
-      - -D NSPANEL_EASY_API
+  build_flags:
+    - -D NSPANEL_EASY_API
 
 script:
   - id: action_component_color
@@ -233,7 +284,6 @@ script:
           ESP_LOGV("${TAG_API}", "  color:     %" PRIu16, color);
           if (page == "mem") return;
           if (page == "chips") return;
-          if (display_easy) return;  // To do: Implement logic for new format
           if (page.empty()) {
             disp1->set_component_font_color(component.c_str(), color);
             return;
@@ -318,8 +368,52 @@ script:
           ESP_LOGV("${TAG_API}", "Script: action_component_val");
           ESP_LOGV("${TAG_API}", "  page: %s", page.c_str());
           ESP_LOGV("${TAG_API}", "  component: %s", component.c_str());
-          ESP_LOGV("${TAG_API}", "  val: %i", val);
-          if (page == "mem") return;
+          ESP_LOGV("${TAG_API}", "  val: %" PRId32, val);
+          if (page == "mem") {
+            // Sets how buttons bound to an unavailable entity are rendered, for every
+            // per-entity button surface at once: button pages, climate page custom
+            // buttons and home page custom buttons. Held on the device because the home
+            // page custom buttons are rendered locally from API subscriptions, with no
+            // blueprint round trip to carry a per-call parameter.
+            // Values: 0 = render as off (legacy), 1 = indicate, 2 = hide.
+            if (component == "unavailable_behavior") {
+              nspanel_easy::UnavailableBehavior requested;
+              switch (val) {
+                case 0:
+                  requested = nspanel_easy::UnavailableBehavior::RENDER_AS_OFF;
+                  break;
+                case 1:
+                  requested = nspanel_easy::UnavailableBehavior::INDICATE;
+                  break;
+                case 2:
+                  requested = nspanel_easy::UnavailableBehavior::HIDE;
+                  break;
+                default:
+                  ESP_LOGW("${TAG_API}", "Unknown unavailable_behavior %" PRId32 ", keeping current", val);
+                  return;
+              }  // switch (val)
+
+              if (requested == nspanel_easy::unavailable_behavior) return;
+              // Leaving HIDE: buttons hidden on the current page must be shown again
+              // by the refresh that follows, which is not a page entry.
+              nspanel_easy::unavailable_unhide_pending =
+                  (nspanel_easy::unavailable_behavior == nspanel_easy::UnavailableBehavior::HIDE);
+              nspanel_easy::unavailable_behavior = requested;
+
+              // Subscription renders happen on-device and only on state changes, so
+              // a button already rendered under the previous behaviour (including a
+              // hidden one) would keep that appearance until its entity changed.
+              // The setting also arrives after the first renders at boot. Replaying
+              // the stored states applies the new behaviour immediately.
+              // Blueprint-driven buttons are re-rendered by the blueprint's refresh
+              // of the current page, which reads the current setting; leaving HIDE
+              // is covered by unavailable_unhide_pending above.
+              #ifdef NSPANEL_EASY_SUBSCRIBE
+              nspanel_easy::sub_render_all();
+              #endif  // NSPANEL_EASY_SUBSCRIBE
+            }  // if (component == "unavailable_behavior")
+            return;
+          }  // if (page == "mem")
           if (page.empty()) {
             disp1->set_component_value(component.c_str(), val);
             return;
@@ -350,18 +444,17 @@ script:
                                                                               extractNextionComponent(component, page);
           const std::string component_page = nextion_component.page;
           const char* target_id = nextion_component.component_id;
-          const bool is_home_page = (component_page == "home");
+          const bool target_is_home_page = (component_page == "home");
           const bool is_current_page = (component_page == current_page->state);
 
-          // Always update the home page persistent visibility variable,
-          // regardless of which page is currently active
-          if (is_home_page &&
-              strcmp(target_id, "indr_temp_icon") != 0 &&
-              strcmp(target_id, "value01_icon")   != 0 &&
-              strcmp(target_id, "value02_icon")   != 0 &&
-              strcmp(target_id, "value03_icon")   != 0 &&
-              strcmp(target_id, "value04_icon")   != 0)
-            disp1->send_command_printf("vis_%s=%" PRIu8, target_id, (uint8_t)visible);
+          // Nextion does not retain vis across page loads, so home page
+          // visibility is mirrored into the vis_home bitmask, which the page's
+          // Preinitialize event walks on entry. Companion components (*_icon)
+          // follow their parent and have no bit of their own, so home_vis_set()
+          // simply finds no match for them.
+          if (target_is_home_page) {
+            home_vis_set(target_id, visible);
+          }
 
           // Apply the vis command only when the target page is currently visible
           if (page.empty() || is_current_page) {
@@ -369,7 +462,7 @@ script:
             return;
           }
 
-          if (!is_home_page)
+          if (!target_is_home_page)
             ESP_LOGW("${TAG_API}", "Not the current page (%s vs %s)", page.c_str(), current_page->state.c_str());
 
   - id: action_icon
@@ -381,8 +474,8 @@ script:
       icon: string          # The icon code
       icon_color: int32_t   # -1 if no color should be set, otherwise the decimal RGB565 color
       visible: bool         # Set to true to show the component, or false to hide it.
-      is_home_page: bool
-      is_current_page: bool
+      target_is_home_page: bool
+      target_is_current_page: bool
     then:
       - lambda: |-
           if (page == "chips") return;  // This is handled elsewhere
@@ -395,10 +488,9 @@ script:
           const char* target_id;
           char full_id[30];  // 14 + 1 (dot) + 14 + 1 (null) = 30
 
-          if (is_current_page) {
+          if (target_is_current_page) {
             // Use short format for current page: "id"
             target_id = component.component_id;
-            action_component_visibility->execute(component.page, component.component_id, visible);
           } else {
             // Use full format for global components: "page.id"
             snprintf(full_id, sizeof(full_id), "%s.%s", component.page, component.component_id);
@@ -412,6 +504,25 @@ script:
           if (icon_color >= 0) {
             disp1->set_component_font_color(target_id, static_cast<uint16_t>(icon_color));
           }
+
+          // Visibility is handled unconditionally: action_component_visibility
+          // writes the persistent vis_* variable for home page targets even when
+          // another page is showing, and applies the live vis command only when
+          // the target page is the current one.
+          action_component_visibility->execute(component.page, component.component_id, visible);
+
+  - id: api_unavailable_feedback  # Something requiring Home Assistant was used while it is not connected
+    mode: restart
+    then:
+      # Extended by:
+      # - hw_buzzer
+      # - hw_wifi
+      - lambda: |-
+          ESP_LOGD("${TAG_API}", "Home Assistant unavailable feedback on page '%s'", page_names[current_page_id]);
+          // The home pages show the connection icon, which explains the refusal (see hw_wifi)
+          if (current_page_id == get_page_id("home") or current_page_id == get_page_id("home_smpl")) return;
+          // Leave any other page that cannot work without Home Assistant
+          if (!is_page_offline_capable(current_page_id)) goto_page->execute(home_page_id);
 
   - id: !extend dump_config
     then:
@@ -443,10 +554,6 @@ script:
           });
           ESP_LOGV("${TAG_API}", "'button_click' event sent");
 
-  - id: !extend page_home
-    then:
-      - script.execute: update_flag_api_ready
-
   - id: !extend stop_all
     then:
       - lambda: |-
@@ -455,6 +562,7 @@ script:
           action_component_text_list->stop();
           action_component_val->stop();
           action_component_visibility->stop();
+          api_unavailable_feedback->stop();
           ha_button->stop();
           update_flag_api_ready->stop();
 
@@ -468,21 +576,9 @@ script:
       - lambda: |-
           update_flag_api_ready->execute();
 
-          #ifdef NSPANEL_EASY_ADDON_CLIMATE_BASE
-          const bool climate_offline_safe = (current_page_id == get_page_id("climate") && climate_embedded_visible);
-          #else  // NSPANEL_EASY_ADDON_CLIMATE_BASE
-          constexpr bool climate_offline_safe = false;
-          #endif  // NSPANEL_EASY_ADDON_CLIMATE_BASE
-
           if (!api_server->is_connected_with_state_subscription() &&
-              current_page_id != get_page_id("boot")        &&
-              current_page_id != get_page_id("confirm")     &&
-              current_page_id != get_page_id("home")        &&
-              current_page_id != get_page_id("qrcode")      &&
-              current_page_id != get_page_id("screensaver") &&
-              current_page_id != get_page_id("settings")    &&
-              !climate_offline_safe) {
+              !is_page_offline_capable(current_page_id)) {
             ESP_LOGW("${TAG_API}", "API disconnected. Falling back to Home page.");
-            goto_page->execute(get_page_id("home"));
+            goto_page->execute(home_page_id);
           }
 ...

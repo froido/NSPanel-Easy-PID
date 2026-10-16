@@ -14,6 +14,8 @@ substitutions:
   nextion_update_url: ""
   upload_tft_automatically: true
   upload_tft_wait_ms_after_setup: 65432  # 65sec - To avoid triggering a reboot before boot is flagged as good
+  tft_upload_http_timeout: 10s
+  tft_upload_watchdog_timeout: 15s
   ##############################################
   TAG_UPLOAD_TFT: "nspanel.addon.upload_tft"
   DISPLAY_MODES_BLANK_TEXT: ${DISPLAY_MODES.BLANK.TEXT}
@@ -92,10 +94,9 @@ packages:
   button_scan_baud_rate: ${ _pkg_button_scan_baud_rate if include_button_scan_baud_rate else {} }
 
 esphome:
-  platformio_options:
-    build_flags:
-      - -D NSPANEL_EASY_ADDON_UPLOAD_TFT
-      - -D NSPANEL_EASY_ADDON_UPLOAD_TFT_AUTOMATICALLY=${1 if upload_tft_automatically else 0}
+  build_flags:
+    - -D NSPANEL_EASY_ADDON_UPLOAD_TFT
+    - -D NSPANEL_EASY_ADDON_UPLOAD_TFT_AUTOMATICALLY=${1 if upload_tft_automatically else 0}
 
 button:
   ##### UPDATE TFT DISPLAY #####
@@ -113,8 +114,8 @@ button:
 display:
   - id: !extend disp1
     exit_reparse_on_start: true
-    tft_upload_http_timeout: 10s
-    tft_upload_watchdog_timeout: 15s
+    tft_upload_http_timeout: ${tft_upload_http_timeout}
+    tft_upload_watchdog_timeout: ${tft_upload_watchdog_timeout}
     tft_url: "http://unused"  # This is an intentional placeholder URL and will be replaced dynamically
     on_setup:
       then:
@@ -194,7 +195,7 @@ script:
           ESP_LOGD("${TAG_UPLOAD_TFT}", "Nextion status:");
           ESP_LOGD("${TAG_UPLOAD_TFT}", "  Is detected: %s", YESNO(disp1->is_detected()));
           ESP_LOGD("${TAG_UPLOAD_TFT}", "  Is setup:    %s", YESNO(disp1->is_setup()));
-          ESP_LOGD("${TAG_UPLOAD_TFT}", "  Queue size:  %d", disp1->queue_size());
+          ESP_LOGD("${TAG_UPLOAD_TFT}", "  Queue size:  %zu", disp1->queue_size());
 
   - id: nextion_upload
     mode: single
@@ -297,9 +298,6 @@ script:
               "${DISPLAY_MODES.US.FILE}",            // 1: NSPanel US
               "${DISPLAY_MODES.US_LAND.FILE}",       // 2: NSPanel US Landscape
               "${DISPLAY_MODES.BLANK.FILE}",         // 3: NSPanel Blank
-              "${DISPLAY_MODES.EASY_EU.FILE}",       // 4: NSPanel Easy EU
-              "${DISPLAY_MODES.EASY_US.FILE}",       // 5: NSPanel Easy US
-              "${DISPLAY_MODES.EASY_US_LAND.FILE}",  // 6: NSPanel Easy US Landscape
             };
             static const size_t FILENAMES_COUNT = sizeof(FILENAMES) / sizeof(FILENAMES[0]);
 
@@ -333,12 +331,10 @@ script:
           // Stop Bluetooth stack to free memory for TFT upload
           #ifdef USE_ESP32_BLE
           ESP_LOGI("${TAG_UPLOAD_TFT}", "Stopping Bluetooth stack to free memory for TFT upload");
-          ESP_LOGI("${TAG_UPLOAD_TFT}", "Free heap before: %u bytes, largest block: %u bytes",
+          ESP_LOGI("${TAG_UPLOAD_TFT}", "Free heap before: %" PRIu32 " bytes, largest block: %zu bytes",
                                         esp_get_free_heap_size(), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
 
-          // Hide Bluetooth icon on page "home"
-          disp1->send_command("vis_bt_icon=0");
-          if (current_page_id == get_page_id("home")) disp1->hide_component(hmi::home::BT_ICON.name);
+          action_component_visibility->execute("home", "bt_icon", false);  // Hide Bluetooth icon on page "home"
 
           // Disable BLE stack
           if (esp32_ble::global_ble != nullptr) {
@@ -349,9 +345,11 @@ script:
       - wait_until:
           condition:
             - lambda: |-
-                // Wait up to 5s to the stack being disabled
+                // Wait for the controller to be fully deinitialized, not just for the
+                // component to leave the ACTIVE state — is_active() turns false as soon
+                // as disable() is requested, while the teardown happens in a later loop.
                 #ifdef USE_ESP32_BLE
-                return (esp32_ble::global_ble == nullptr || !esp32_ble::global_ble->is_active());
+                return nspanel_easy::bt_controller_is_idle();
                 #else
                 return true;
                 #endif  // USE_ESP32_BLE
@@ -359,18 +357,16 @@ script:
       - lambda: |-
           // Release BT memory back to the heap — not done by disable().
           // Required to reclaim RAM for the TFT upload.
-          #ifdef USE_BLUETOOTH_PROXY
+          #ifdef USE_ESP32_BLE
           ESP_LOGD("${TAG_UPLOAD_TFT}", "Releasing Bluetooth memory (BTDM)");
-          esp_err_t err = esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
+          const esp_err_t err = nspanel_easy::release_bt_memory();
           if (err == ESP_OK) {
             ESP_LOGI("${TAG_UPLOAD_TFT}", "Bluetooth memory released successfully");
           } else {
             ESP_LOGW("${TAG_UPLOAD_TFT}", "Bluetooth memory release failed: %s", esp_err_to_name(err));
           }
-          #endif  // USE_BLUETOOTH_PROXY
-          #ifdef USE_ESP32_BLE
-          ESP_LOGI("${TAG_UPLOAD_TFT}", "Free heap after: %u bytes, largest block: %u bytes",
-                                        esp_get_free_heap_size(), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+          ESP_LOGI("${TAG_UPLOAD_TFT}", "Free heap after: %" PRIu32 " bytes, largest block: %zu bytes",
+                              esp_get_free_heap_size(), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
           #endif  // USE_ESP32_BLE
 
       - lambda: |-
@@ -438,5 +434,4 @@ select:
   - id: !extend display_model
     options:
       - ${DISPLAY_MODES.BLANK.TEXT}
-      - ${DISPLAY_MODES.EASY_EU.TEXT}
 ...

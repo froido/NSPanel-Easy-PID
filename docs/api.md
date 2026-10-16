@@ -5,6 +5,9 @@ This document provides details on custom actions designed for integration with H
 ## Summary
 
 - [Action Documentation](#action-documentation)
+  - [API Subscribe Action (`api_subscribe`)](#api-subscribe-actions-api_subscribe-api_subscribe_end):
+    Binds a Home Assistant entity directly to a panel component, so state changes render without an automation run.
+  - [API Subscribe End Action (`api_subscribe_end`)](#api-subscribe-actions-api_subscribe-api_subscribe_end): Closes a binding push and states how many bindings were sent.
   - [Button Action (`button`)](#button-action-button): Configures properties and state of buttons on a specified button page.
   - [Command Action (`command`) - DEPRECATED](#command-action-command): Sends a custom command directly to the display.
   - [Component Color Action (`component_color`)](#component-color-action-component_color): Changes the foreground color of a specified component on the display.
@@ -19,10 +22,10 @@ This document provides details on custom actions designed for integration with H
   - [Notification Show Action (`notification_show`)](#notification-show-action-notification_show): Displays a notification-message on the screen.
   - [QR Code Action (`qrcode`)](#qr-code-action-qrcode): Displays a QR code on the panel or updates the QR code information for local control.
   - [RTTTL Play Action (`rtttl_play`)](#rtttl-play-action-rtttl_play): Plays melodies encoded in the RTTTL format.
-  - [Upload TFT Action (`upload_tft`)](#tft-file-update-action-upload_tft): Enables TFT file updates from a URL, requiring the "Upload TFT" add-on.
+  - [Upload TFT Action (`upload_tft`)](#tft-file-update-action-upload_tft): Enables TFT file updates from a URL, requiring the "Upload TFT" add-on. Opt-in.
   - [Utilities Group Refresh Action (`utilities_group_refresh`)](#utilities-group-refresh-action-utilities_group_refresh): Updates utility group display values and direction indicators.
   - [Value Action (`value`)](#value-action-value): Updates an entity to display specific values.
-  - [Wake Up Action (`wake_up`)](#wake-up-action-wake_up): Activates the display from a screensaver or low-brightness state.
+  - [Wake Up Action (`wake_up`)](#wake-up-action-wake_up): Activates the display from a screensaver or low-brightness state. Opt-in.
   - [Alarm Settings Page Action (`page_alarm`)](#alarm-settings-page-action-page_alarm): Updates the Alarm page with current state information.
   - [Climate Page Action (`page_climate`)](#climate-page-action-page_climate): Updates the Climate page with current state information.
   - [Media Player Page Action (`page_media_player`)](#media-player-page-action-page_media_player): Updates the Media Player page with current state information.
@@ -61,6 +64,8 @@ You can look up the action names available on your Home Assistant instance under
 <!-- markdownlint-disable MD013 -->
 | Action ID | Action Name | Description |
 | --------- | ----------- | ----------- |
+| [`api_subscribe`](#api-subscribe-actions-api_subscribe-api_subscribe_end) | [API Subscribe Action](#api-subscribe-actions-api_subscribe-api_subscribe_end) | Binds a Home Assistant entity directly to a panel component, so state changes render without an automation run. |
+| [`api_subscribe_end`](#api-subscribe-actions-api_subscribe-api_subscribe_end) | [API Subscribe End Action](#api-subscribe-actions-api_subscribe-api_subscribe_end) | Closes a binding push and states how many bindings were sent. |
 | [`button`](#button-action-button) | [Button Action](#button-action-button) | Configures properties and state of buttons on a specified button page. |
 | [`command`](#command-action-command) | [Command Action](#command-action-command) | Sends a custom command directly to the display. |
 | [`component_color`](#component-color-action-component_color) | [Component Color Action](#component-color-action-component_color) | Changes the foreground color of a specified component on the display. |
@@ -77,11 +82,25 @@ You can look up the action names available on your Home Assistant instance under
 | [`page_media_player`](#media-player-page-action-page_media_player) | [Media Player Page Action](#media-player-page-action-page_media_player) | Updates the Media Player page with current state information. |
 | [`qrcode`](#qr-code-action-qrcode) | [QR Code Action](#qr-code-action-qrcode) | Displays a QR code on the panel or updates the QR code information for local control. |
 | [`rtttl_play`](#rtttl-play-action-rtttl_play) | [RTTTL Play Action](#rtttl-play-action-rtttl_play) | Plays melodies encoded in the RTTTL format. |
-| [`upload_tft`](#tft-file-update-action-upload_tft) | [Upload TFT Action](#tft-file-update-action-upload_tft) | Enables TFT file updates from a URL, requiring the "Upload TFT" add-on. |
+| [`upload_tft`](#tft-file-update-action-upload_tft) | [Upload TFT Action](#tft-file-update-action-upload_tft) | Enables TFT file updates from a URL, requiring the "Upload TFT" add-on. Opt-in. |
 | [`utilities_group_refresh`](#utilities-group-refresh-action-utilities_group_refresh) | [Utilities Group Refresh Action](#utilities-group-refresh-action-utilities_group_refresh) | Updates utility group display values and direction indicators. |
 | [`value`](#value-action-value) | [Value Action](#value-action-value) | Updates an entity to display specific values. |
-| [`wake_up`](#wake-up-action-wake_up) | [Wake Up Action](#wake-up-action-wake_up) | Activates the display from a screensaver or low-brightness state. |
+| [`wake_up`](#wake-up-action-wake_up) | [Wake Up Action](#wake-up-action-wake_up) | Activates the display from a screensaver or low-brightness state. Opt-in. |
 <!-- markdownlint-enable MD013 -->
+
+### API Subscribe Actions: `api_subscribe`, `api_subscribe_end`
+
+These two actions register bindings between Home Assistant entities and panel components. Once
+bound, Home Assistant streams state changes straight to the panel over the API connection and the
+panel renders them locally — no automation runs per state change.
+
+Unlike the other actions on this page, they configure an ongoing subscription rather than performing
+a one-off update, and they carry lifecycle rules that do not fit this reference format: a push
+replaces the complete set of bindings, must be closed with an end marker, and a change to any bound
+entity requires a restart to take effect.
+
+See [API Subscriptions](api_subscribe.md) for the full documentation, including parameters, state
+classification, on-device appearance resolution, and troubleshooting.
 
 ### Button Action: `button`
 
@@ -241,6 +260,18 @@ Also used by page modules that store list-shaped data in memory (e.g. the option
 > - `nspanel_esphome_page_utilities.yaml` extends these actions for utilities-specific memory variables
 > - Other component files may add their own `mem` handlers
 >
+> Some `mem` targets are provided by the core packages and are therefore always available:
+>
+> - `command` — sends each non-empty element of `txt_list` to the display as a raw Nextion command,
+>   in the order given (provided by `nspanel_esphome_hw_display.yaml`, part of `nspanel_esphome_core.yaml`)
+> - `details_overlap` — sets the title and icon of the next entity details page opened with
+>   [`entity_details_show`](#entity-details-show-action-entity_details_show).
+>   `txt_list` is `[entity, title, icon]`, where `entity` must match the entity passed to `entity_details_show`,
+>   `title` is the page title and `icon` is an MDI icon name (`mdi:<name>`); leave `title` or `icon` blank to use the entity's own.
+>   The panel does not interpret these values: it stores them as-is and reports them back to the Blueprint when the page opens,
+>   and the Blueprint converts the icon to its glyph. The values are cleared when the panel leaves the entity details pages
+>   (provided by `nspanel_esphome_api.yaml`, part of `nspanel_esphome_core.yaml`)
+>
 > **Before using `page: mem` in your automations:**
 >
 > 1. Verify that your ESPHome configuration includes the extension file that handles the specific memory variable you want to update
@@ -273,6 +304,8 @@ data:
     - "Pulse"
     - "Twinkle"
 ```
+
+The `popup_select` picker accepts up to 32 options and shows them in pages of 8, navigated by swiping up or down on the list or with the arrow buttons below it. Options beyond the 32nd are discarded.
 
 > [!NOTE]
 > Replace `<your_panel_name>` with the slugified name of your panel (see [Action naming](#action-naming-and-your_panel_name)).
@@ -386,6 +419,7 @@ ensuring they can easily access detailed information and return to their initial
   - `climate`
   - `cover`
   - `fan`
+  - `humidifier` (shown on the water heater page)
   - `input_boolean`
   - `input_button`
   - `light`
@@ -394,9 +428,12 @@ ensuring they can easily access detailed information and return to their initial
   - `water_heater`
 
   Use the special value `embedded_climate` to open the built-in climate control page for the panel's relay-based thermostat.
+  If the details page for that domain is already shown for a different entity, the page is reloaded with the new entity.
+  Requests for the entity already shown are ignored.
 - `back_page` (string): The page identifier to return to after viewing entity details.
   Valid options are `home` for the home page or `buttonpage01` to `buttonpage04` for button pages.
   No other pages are supported to maintain navigation consistency.
+  Leave it empty to keep the current return target unchanged.
 
 **Home Assistant Example:**
 
@@ -407,9 +444,28 @@ data:
   back_page: "buttonpage01"
 ```
 
+To show a custom title or icon on the details page, set them with `component_text_list` right before calling this action:
+
+```yaml
+action: esphome.<your_panel_name>_component_text_list
+data:
+  page: mem
+  id: details_overlap
+  txt_list:
+    - "light.living_room"
+    - "Reading light"
+    - "mdi:floor-lamp"
+```
+
+<!-- markdownlint-disable MD028 -->
+> [!NOTE]
+> The title and icon are rendered by the NSPanel Easy Blueprint when the page opens, so pass the icon as an MDI name (`mdi:<name>`), not as a glyph.
+> Without the Blueprint, or when the entity does not match, the entity's own name and icon are used.
+
 > [!NOTE]
 > Replace `<your_panel_name>` with the slugified name of your panel (see [Action naming](#action-naming-and-your_panel_name)).
 > This setup provides a direct and user-friendly way to access and return from detailed entity information, enhancing the interface's usability.
+<!-- markdownlint-enable MD028 -->
 
 ### Hardware Button State Indication Action: `hw_button_state`
 
@@ -771,6 +827,10 @@ data:
 
 ### TFT File Update Action: `upload_tft`
 
+> [!IMPORTANT]
+> This action is not registered by default. To enable it, add `include_action_upload_tft: true` to the substitutions in your ESPHome YAML.
+> See [Reducing Registered API Actions](install.md#reducing-registered-api-actions) for details.
+
 Enables the remote update of the panel's TFT file from a specified URL or a default location,
 available exclusively with the "Upload TFT" add-on installed.
 This action is valuable for downloading alternative TFT files for customization or addressing file access issues.
@@ -857,7 +917,7 @@ Indicates the icon displayed next to the value.
 action: esphome.<your_panel_name>_value
 data:
   id: "sensor.temperature"
-  icon: "\uE6E8"           # Example for mdi:thermometer
+  icon: "\uE50E"           # Example for mdi:thermometer
   icon_color: [255, 0, 0]  # Red
   name: "Temperature"
   value: "75°F"
@@ -868,6 +928,10 @@ data:
 > Replace `<your_panel_name>` with the slugified name of your panel (see [Action naming](#action-naming-and-your_panel_name)).
 
 ### Wake Up Action: `wake_up`
+
+> [!IMPORTANT]
+> This action is not registered by default. To enable it, add `include_action_wake_up: true` to the substitutions in your ESPHome YAML.
+> See [Reducing Registered API Actions](install.md#reducing-registered-api-actions) for details.
 
 Activates the display from a screensaver or low-power state, enabling dynamic interface adjustments based on user interactions or automated triggers.
 
@@ -929,6 +993,7 @@ automation:
 #### User-defined Chips
 
 - **Description**: Chips are status indicator icons shown on the home page and screensaver. Their behaviour is controlled by the blueprint.
+- **Alternative**: User-defined chips can be driven directly from Home Assistant entity states instead of the blueprint. See [API Subscriptions](api_subscribe.md).
 - **Availability**: Rendered on home page and screensaver. Use `page: chips` in the `icon` action to update them from any page context.
 - **Ids**: `chip01` to `chip07`.
 

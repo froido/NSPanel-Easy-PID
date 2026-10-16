@@ -4,17 +4,190 @@
 
 #ifdef NSPANEL_EASY_PAGE_HOME
 
+#include <cstdint>
+#include <cstring>
+#include <functional>
+
 #include "nextion_components.h"
+
+#ifdef NSPANEL_EASY_SUBSCRIBE
+#include "api_subscriptions.h"
+#endif  // NSPANEL_EASY_SUBSCRIBE
+
+#ifdef NSPANEL_EASY_HW_DISPLAY
+#include "hw_display.h"
+#endif  // NSPANEL_EASY_HW_DISPLAY
+
+#ifdef NSPANEL_EASY_USE_WEATHER
+#include "weather.h"
+#endif  // NSPANEL_EASY_USE_WEATHER
 
 /**
  * @file page_home.h
- * @brief Nextion component definitions for the Home page.
+ * @brief Subscription-driven home page components.
  *
- * This file contains all component constants specific to the Home page
- * of the NSPanel interface.
+ * Custom buttons: unlike chips, a bound custom button is always visible. It
+ * renders icon_on or icon_off according to the entity's state rather than
+ * appearing and disappearing. Unbound slots are left entirely to the blueprint.
+ *
+ * Weather picture: resolved from the condition, the sun elevation and the
+ * active theme. Index 0 of the condition table is blank in both themes, so an
+ * unknown or not-yet-received condition needs no visibility handling.
+ *
+ * Temperatures: rendered exactly as Home Assistant reports them, with no unit
+ * conversion. Indoor falls back to the panel's own sensor when the bound entity
+ * has no value; outdoor is hidden, having no local equivalent.
  */
 
 namespace esphome::nspanel_easy {
+
+inline bool is_home_page() { return current_page_id == get_page_id("home"); }
+
+/**
+ * @brief Bit positions in the Nextion vis_home bitmask.
+ *
+ * The display's home page Preinitialize event walks these bits to restore
+ * visibility, since Nextion does not retain vis across page loads. Companion
+ * components (*_icon) follow their parent and have no bit of their own.
+ */
+struct HomeVisBit {
+  const char *component;  ///< Unscoped component name as the blueprint sends it
+  uint8_t bit;            ///< Bit position in vis_home
+};
+
+static constexpr HomeVisBit HOME_VIS_BITS[] = {
+    {"indr_temp", 0},     {"indr_temp_icon", 0}, {"outdoor_temp", 1},  {"bt_icon", 2},       {"bt_utilities", 3},
+    {"bt_notific", 4},    {"bt_qrcode", 5},      {"bt_entities", 6},   {"button01", 7},      {"button02", 8},
+    {"button03", 9},      {"button04", 10},      {"button05", 11},     {"button06", 12},     {"button07", 13},
+    {"value01", 14},      {"value01_icon", 14},  {"value02", 15},      {"value02_icon", 15}, {"value03", 16},
+    {"value03_icon", 16}, {"value04", 17},       {"value04_icon", 17},
+};
+
+extern uint32_t home_vis_mask;
+
+bool home_vis_set(const char *component, bool visible);
+
+void home_vis_resend();
+
+/// @brief Number of custom button slots on the home page (button01..button07).
+static constexpr uint8_t HOME_BUTTON_COUNT = 7;
+
+/**
+ * @brief Parse the slot index out of a custom button component name.
+ *
+ * Used as a probe by both the subscription renderer and the confirmation gate:
+ * a component that is not a custom button is an ordinary outcome here, so no
+ * warning is emitted. Callers report on their own terms.
+ *
+ * @param component Component name, expected as "button%02u".
+ * @return Zero-based slot index, or UINT8_MAX if the name is not a custom button.
+ */
+uint8_t parse_home_button_index(const char *component);
+
+#ifdef NSPANEL_EASY_SUBSCRIBE
+
+/**
+ * @brief Last rendered appearance of a home custom button.
+ *
+ * Lets a state change skip redundant Nextion writes, and lets the page be
+ * repainted on entry without a round trip to Home Assistant.
+ */
+struct HomeButtonState {
+  char icon[4];    ///< UTF-8 MDI codepoint (1-3 bytes + null terminator)
+  uint16_t color;  ///< RGB565 foreground color
+  bool bound;      ///< Driven by a subscription; the blueprint does not own it
+  bool shown;      ///< Whether the component has been made visible
+};
+static_assert(sizeof(HomeButtonState::icon) >= 4, "Icons are BMP private-use codepoints: 3 bytes + null");
+
+/// @brief Shadow state array; one entry per custom button slot.
+extern HomeButtonState home_button_states[HOME_BUTTON_COUNT];
+
+/// @brief Buffer size for a formatted temperature, e.g. "-12,3 \u00b0C".
+static constexpr size_t TEMP_TEXT_LEN = 15;
+
+/**
+ * @brief Whether a subscription targets the indoor temperature component.
+ *
+ * Read by display_embedded_temp(), which must not write the component while the
+ * subscription owns it.
+ */
+extern bool indoor_temp_bound;
+
+/// @brief Whether the bound indoor entity last reported a usable number.
+extern bool indoor_temp_valid;
+
+/**
+ * @brief Invoked when a bound indoor temperature stops being usable.
+ *
+ * Assigned from hw_temperature.yaml, where display_embedded_temp() is visible.
+ * Without it the embedded sensor would only take back over on its next
+ * publication, which can be minutes away.
+ */
+extern std::function<void()> indoor_temp_fallback;
+
+/**
+ * @brief Render a subscription binding onto its home page component.
+ *
+ * Registered for the "home" page in sub_resolve_renderer(), so every binding
+ * targeting this page arrives here. Dispatches on the component name, since
+ * renderers are resolved per page rather than per component. Receives an
+ * already-classified state and decides only how to draw it.
+ *
+ * @param binding The binding being rendered.
+ * @param rt Runtime state, including blueprint-supplied appearance.
+ * @param state Effective state string; hvac_action for climate when usable.
+ * @param visible Unused: home page targets manage their own visibility.
+ */
+void home_sub_render(const SubBinding &binding, const SubRuntime &rt, const char *state, bool visible);
+
+/**
+ * @brief Repaint every bound home component from its shadow state.
+ *
+ * Called when the home page is entered, since the Nextion side does not retain
+ * what was drawn on a page that has been left. Covers the custom buttons and
+ * both temperatures; the weather picture is repainted by home_weather_resolve().
+ */
+void home_button_repaint();
+
+/**
+ * @brief Track the Home Assistant connection for the subscribed home components.
+ *
+ * While disconnected, Home Assistant cannot report the bound indoor temperature
+ * entity, so its last value is stale. It is then treated as unusable and the
+ * component is handed back to the embedded sensor, as when the entity itself
+ * becomes unavailable.
+ *
+ * On reconnect, Home Assistant only re-sends states that differ from the cached
+ * ones, so an unchanged value would never be rendered again. The bindings are
+ * therefore re-applied from their cached state, but only after a disconnection
+ * actually invalidated something.
+ *
+ * Safe to call repeatedly with the same value; it runs on every watchdog round.
+ *
+ * @param connected Whether the API is connected with a state subscription.
+ */
+void home_api_connection_update(bool connected);
+
+#ifdef NSPANEL_EASY_USE_WEATHER
+
+/**
+ * @brief Resolve and draw the home weather picture.
+ *
+ * Combines the stored condition index, the sun elevation and the active theme
+ * into a single picture ID. Call after anything those three depend on changes:
+ * a new condition from the subscription, a theme change, sunrise or sunset, and
+ * once the sun coordinates have been applied.
+ *
+ * Safe to call before the display pointer has been handed over; it returns
+ * without drawing in that case.
+ */
+void home_weather_resolve();
+
+#endif  // NSPANEL_EASY_USE_WEATHER
+
+#endif  // NSPANEL_EASY_SUBSCRIBE
+
 namespace hmi::home {
 
 /**
@@ -72,10 +245,6 @@ constexpr HMIComponent BT_NOTIFIC = {"home.bt_notific", 28};      ///< Notificat
 constexpr HMIComponent BT_QRCODE = {"home.bt_qrcode", 29};        ///< QR code button (3 chars max)
 constexpr HMIComponent BT_ENTITIES = {"home.bt_entities", 30};    ///< Entities button (3 chars max)
 constexpr HMIComponent BT_UTILITIES = {"home.bt_utilities", 43};  ///< Utilities button (3 chars max)
-
-// Footer text components
-constexpr HMIComponent LEFT_BT_TEXT = {"home.left_bt_text", 9};     ///< Left button text (20 chars max)
-constexpr HMIComponent RIGHT_BT_TEXT = {"home.right_bt_text", 10};  ///< Right button text (20 chars max)
 
 // System indicators
 constexpr HMIComponent WIFI_ICON = {"home.wifi_icon", 26};  ///< WiFi status icon (5 chars max)

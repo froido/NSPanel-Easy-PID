@@ -14,15 +14,23 @@ substitutions:
   # Minimum required blueprint version for compatibility
   # Select 'next' or '${version}' when you change the "contract" between ESPHome and Blueprint
   # Versioning workflow will replace this by the new version being generated
-  min_blueprint_version: 2026.5.15
+  min_blueprint_version: 2026.10.1
+
+  # API version (MAJOR.MINOR) provided by this firmware, reported to the Blueprint in every event
+  # Keep it quoted: unquoted, YAML reads 1.10 as the number 1.1
+  # MINOR: bump when an API action is added, as older Blueprints keep working
+  # MAJOR: bump (and reset MINOR to 0) when an API action is removed or its parameters change,
+  #        and also set min_blueprint_version to 'next', as older Blueprints can no longer call it
+  # The Blueprint declares the API version it uses in its 'api_version' variable
+  api_version: "1.0"
 
   # Minimum required TFT version for compatibility
   # Must be manually updated with Nextion Editor
-  min_tft_version: 20.0
+  min_tft_version: 22.0
 
   # Minimum required ESPHome compiler to run this
   # Versioning workflow will take care of updating this
-  min_esphome_compiler_version: 2026.4.0
+  min_esphome_compiler_version: 2026.8.0
 
   TAG_VERSIONING: nspanel.versioning
 
@@ -33,9 +41,8 @@ substitutions:
 esphome:
   project:
     version: '"${version}"'
-  platformio_options:
-    build_flags:
-      - -D NSPANEL_EASY_VERSIONING
+  build_flags:
+    - -D NSPANEL_EASY_VERSIONING
   min_version: ${min_esphome_compiler_version}
 
 script:
@@ -52,8 +59,10 @@ script:
 
   - id: !extend boot_early_routines
     then:
+      - lambda: |-
+          firmware_api_version = "${api_version}";
       - text_sensor.template.publish:
-          id: version_esphome
+          id: version_firmware
           state: ${version}
 
   - id: check_versions
@@ -183,13 +192,15 @@ script:
       - script.wait: wait_for_version_blueprint
 
 text_sensor:
-  - id: version_esphome
-    name: "Version - ESPHome"
+  - id: version_firmware
+    name: "Version - Firmware"
     platform: template
     entity_category: diagnostic
     icon: mdi:tag-text-outline
     internal: false
     update_interval: never
+    # Holds the NSPanel Easy firmware version (${version}), not the version of
+    # the ESPHome framework used to compile it. See issue #386.
     # Published by boot_early_routines during boot sequence.
 
   - id: version_blueprint

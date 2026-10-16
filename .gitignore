@@ -15,5 +15,10 @@ SyncNextion2TXT.cmd
 /dev
 .esphome
 /components/nspanel_easy/__pycache__
+__pycache__/
+*.pyc
 
 local
+
+# Pinned Nextion2Text copy fetched by generate_nextion_txt.sh
+/hmi/dev/.cache
