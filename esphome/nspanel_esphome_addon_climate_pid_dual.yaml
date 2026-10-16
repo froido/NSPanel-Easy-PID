@@ -51,12 +51,11 @@ substitutions:
   TAG_ADDON_CLIMATE_PID: nspanel.addon.climate.pid
 
 esphome:
-  platformio_options:
-    build_flags:
-      # Gleiche Flag wie das originale Dual-Add-on, damit die unveraenderte
-      # climate_base die Dual-UI (zwei Sollwerte) auf dem Display aktiviert.
-      - -D NSPANEL_EASY_ADDON_CLIMATE_DUAL
-      - -D NSPANEL_EASY_ADDON_CLIMATE_PID
+  build_flags:
+    # Gleiche Flag wie das originale Dual-Add-on, damit die unveraenderte
+    # climate_base die Dual-UI (zwei Sollwerte) auf dem Display aktiviert.
+    - -D NSPANEL_EASY_ADDON_CLIMATE_DUAL
+    - -D NSPANEL_EASY_ADDON_CLIMATE_PID
 
 #####################################################################################################
 ##### 1. Thermostat "entwaffnen": Er haelt Sollwerte/Modus fuer UI & HA, schaltet aber nur      #####
