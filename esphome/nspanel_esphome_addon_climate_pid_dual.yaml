@@ -1,23 +1,20 @@
 #####################################################################################################
 #####                 NSPanel Easy - https://github.com/edwardtfn/NSPanel-Easy                  #####
 #####################################################################################################
-##### ESPHome Add-on for Climate control - PID Dual (Community-Anpassung)                       #####
-#####                                                                                           #####
-##### Ersetzt nspanel_esphome_addon_climate_dual.yaml durch eine PI/PWM-Regelung                #####
-##### (geeignet fuer traege Systeme wie Fussbodenheizung).                                      #####
-#####                                                                                           #####
-##### Architektur:                                                                              #####
-#####   - thermostat_embedded bleibt als Sollwert-Halter und UI-Schnittstelle erhalten          #####
-#####     (Display-Seite "climate", Klima-Chip und Blueprint funktionieren unveraendert),       #####
-#####     schaltet aber nur noch den Dummy-Relay 0 -> keine direkte Relais-Steuerung.           #####
-#####   - Zwei interne PID-Regler (Heizen/Kuehlen) uebernehmen die eigentliche Regelung.        #####
-#####     Sollwerte: target_temperature_low -> PID Heizen, target_temperature_high -> PID       #####
-#####     Kuehlen. Der Modus (off/heat/cool/heat_cool) wird ebenfalls uebernommen.              #####
-#####   - Die Relais werden ueber slow_pwm moduliert (Zykluszeit ${pwm_period}s).               #####
-#####                                                                                           #####
-##### Einbindung: siehe Beispiel am Ende der Datei. Diese Datei laedt die Climate-Basis        #####
-##### selbst nach (wie das originale Dual-Add-on). WICHTIG: Die originalen                      #####
-##### climate_heat/cool/dual-Dateien duerfen NICHT gleichzeitig geladen sein.                   #####
+##### ESPHome Add-on for Climate control - PID Dual (two setpoints, heat and cool)              #####
+##### PLEASE only make changes if it is necessary and also the required knowledge is available. #####
+##### For normal use with the Blueprint, no changes are necessary.                              #####
+#####################################################################################################
+##### PI/PWM control for slow systems such as underfloor heating, replacing the two-point       #####
+##### control of the dual add-on.                                                               #####
+##### - thermostat_embedded keeps holding setpoints and mode for display, chip and Blueprint,   #####
+#####   but only switches the dummy relay 0.                                                    #####
+##### - Two internal PID controllers do the actual control: target_temperature_low -> heat,     #####
+#####   target_temperature_high -> cool. The mode (off/heat/cool/heat_cool) is copied as well.  #####
+##### - The relays are modulated by slow PWM outputs.                                           #####
+#####################################################################################################
+##### ATTENTION: Do NOT combine with climate_heat, climate_cool, climate_dual or                #####
+##### climate_pid_single. The climate base is included by this file.                            #####
 #####################################################################################################
 ---
 substitutions:
@@ -25,44 +22,34 @@ substitutions:
   ## Change only in your      ##
   ## local yaml substitutions ##
   ##############################
-  ### PID-Parameter (Startwerte fuer Fussbodenheizung) ###
-  # kp: Stellgroessen-Anteil pro Kelvin Abweichung (0.3 = 30 %/K)
-  # ki: kp / Nachstellzeit in Sekunden (0.3 / 10800s = 3h -> 0.00003)
-  # kd: D-Anteil, bei traegem Estrich nicht sinnvoll -> 0
-  pid_kp: "0.3"
-  pid_ki: "0.00003"
-  pid_kd: "0.0"
-  # Totzone um den Sollwert (in Kelvin/°C, auch bei temp_units °F!)
-  pid_deadband: "0.25"
-  # PWM-Zykluszeit in Sekunden (1200 s = 20 min)
-  pwm_period: "1200"
-  # Start-I-Anteil nach Neustart (0.0..1.0). Der I-Speicher wird nicht im Flash
-  # persistiert; ein sinnvoller Startwert (z. B. die typische mittlere
-  # Stellgroesse im Winter, etwa "0.3") verkuerzt das Einschwingen nach Reboot.
-  pid_starting_integral: "0.0"
-  # Sync-Intervall Thermostat -> PID in Sekunden
-  pid_sync_interval: "10"
-  # Nachstellzeit Tn in MINUTEN - Startwert fuer die HA-einstellbare Nummer.
-  # Hinweis: pid_kp/pid_tn sind nur noch SEED-Werte fuer den ersten Boot; danach
-  # sind die number-Entitaeten in HA die fuehrende Quelle (restore_value).
-  # pid_ki oben bleibt der Compile-Zeit-Default, wird aber beim Boot vom
-  # Tuning-Script ueberschrieben (ki = kp / (Tn * 60)).
-  pid_tn: "180"
+  ### PID seed values (first boot only, afterwards the number entities in HA are the source) ###
+  pid_kp: "0.3"                 # Proportional gain: output share per Kelvin of error (0.3 = 30 %/K)
+  pid_ki: "0.00003"             # Compile-time default, overwritten at boot by ki = kp / (Tn * 60)
+  pid_kd: "0.0"                 # Derivative term, not useful for slow systems
+  pid_tn: "180"                 # Integral time Tn in minutes
+  pid_deadband: "0.25"          # Deadband around the setpoint in Kelvin (also when temp_units is °F)
+  pwm_period: "1200"            # PWM cycle time in seconds
+  pid_starting_integral: "0.0"  # Integral term after boot (0.0..1.0), not persisted in flash
+  pid_sync_interval: "10"       # Seconds between syncs thermostat -> PID controllers
+  ### Entity names (override to keep existing entity IDs or to localize) ###
+  pid_name_heat_output: "PID Heat output"
+  pid_name_cool_output: "PID Cool output"
+  pid_name_heat_integral: "PID Heat integral"
+  pid_name_cool_integral: "PID Cool integral"
+  pid_name_kp: "PID kp"
+  pid_name_tn: "PID Tn"
+  pid_name_pwm_period: "PID PWM period"
+  pid_name_deadband: "PID Deadband"
+  pid_name_reset_integral: "PID Reset integral"
   TAG_ADDON_CLIMATE_PID: nspanel.addon.climate.pid
 
 esphome:
   build_flags:
-    # Gleiche Flag wie das originale Dual-Add-on, damit die unveraenderte
-    # climate_base die Dual-UI (zwei Sollwerte) auf dem Display aktiviert.
-    - -D NSPANEL_EASY_ADDON_CLIMATE_DUAL
+    - -D NSPANEL_EASY_ADDON_CLIMATE_DUAL  # Dual setpoint UI on the display, as with the dual add-on
     - -D NSPANEL_EASY_ADDON_CLIMATE_PID
 
-#####################################################################################################
-##### 1. Thermostat "entwaffnen": Er haelt Sollwerte/Modus fuer UI & HA, schaltet aber nur      #####
-#####    den Dummy-Relay 0. Deadband/Overrun steuern damit nur noch die Aktivitaets-Anzeige     #####
-#####    (Klima-Chip Heizen/Kuehlen), nicht mehr die Relais.                                    #####
-#####################################################################################################
 climate:
+  # Thermostat facade: holds setpoints and mode, deadband/overrun only drive the activity display
   - id: !extend thermostat_embedded
     min_cooling_off_time: 1s
     min_heating_off_time: 1s
@@ -73,7 +60,7 @@ climate:
     heat_deadband: ${heat_deadband} ${temp_units}
     heat_overrun: ${heat_overrun} ${temp_units}
     cool_action:
-      - switch.turn_on: relay_0   # Dummy - Relais werden von den PIDs geschaltet
+      - switch.turn_on: relay_0   # Dummy, the relays are driven by the PID controllers
     heat_action:
       - switch.turn_on: relay_0   # Dummy
     idle_action:
@@ -88,47 +75,44 @@ climate:
         default_target_temperature_low: ${target_low} ${temp_units}
         mode: "heat_cool"
 
-  #################################################################################################
-  ##### 2. Die eigentlichen Regler: zwei unabhaengige PID-Instanzen.                         #####
-  #####    internal: true -> nicht in HA sichtbar, Bedienung laeuft ueber thermostat_embedded #####
-  #################################################################################################
+  # Two independent internal controllers, operated through thermostat_embedded
   - platform: pid
     id: pid_heat_embedded
-    name: PID Heizen
+    name: PID Heat
     internal: true
     sensor: temp_nspanel
-    default_target_temperature: 21  # wird nach Boot sofort vom Sync ueberschrieben
+    default_target_temperature: 21  # Overwritten by the sync right after boot
     heat_output: pid_heat_pwm
     control_parameters:
       kp: ${pid_kp}
       ki: ${pid_ki}
       kd: ${pid_kd}
       starting_integral_term: ${pid_starting_integral}
-      min_integral: 0.0
+      min_integral: 0.0  # Heating: error and integral term are positive
       max_integral: 1.0
       output_averaging_samples: 5
     deadband_parameters:
       threshold_high: ${pid_deadband}°C
       threshold_low: -${pid_deadband}°C
-      kp_multiplier: 0.0
-      ki_multiplier: 0.05
+      kp_multiplier: 0.0   # No proportional reaction inside the deadband
+      ki_multiplier: 0.05  # Integral keeps creeping slowly inside the deadband
       kd_multiplier: 0.0
       deadband_output_averaging_samples: 15
 
   - platform: pid
     id: pid_cool_embedded
-    name: PID Kuehlen
+    name: PID Cool
     internal: true
     sensor: temp_nspanel
-    default_target_temperature: 24  # wird nach Boot sofort vom Sync ueberschrieben
+    default_target_temperature: 24  # Overwritten by the sync right after boot
     cool_output: pid_cool_pwm
     control_parameters:
       kp: ${pid_kp}
       ki: ${pid_ki}
       kd: ${pid_kd}
-      starting_integral_term: ${pid_starting_integral}
-      min_integral: 0.0
-      max_integral: 1.0
+      starting_integral_term: -${pid_starting_integral}
+      min_integral: -1.0  # Cooling: error and integral term are negative
+      max_integral: 0.0
       output_averaging_samples: 5
     deadband_parameters:
       threshold_high: ${pid_deadband}°C
@@ -138,12 +122,8 @@ climate:
       kd_multiplier: 0.0
       deadband_output_averaging_samples: 15
 
-#####################################################################################################
-##### 3. Slow-PWM-Ausgaenge: setzen die PID-Stellgroesse (0..100 %) in Ein/Aus-Zyklen der       #####
-#####    Panel-Relais um. Es werden die bestehenden Relais-Switches geschaltet (kein            #####
-#####    Pin-Konflikt, Zustand bleibt in HA sichtbar).                                          #####
-#####################################################################################################
 output:
+  # Turn the controller outputs (0..100 %) into on/off cycles of the existing relay switches
   - platform: slow_pwm
     id: pid_heat_pwm
     period: ${pwm_period}s
@@ -160,12 +140,9 @@ output:
     turn_off_action:
       - switch.turn_off: relay_${cooler_relay}
 
-#####################################################################################################
-##### 4. Sync Thermostat -> PIDs: Modus und Sollwerte werden periodisch uebernommen.            #####
-#####    Aenderungserkennung verhindert unnoetige State-Publishes.                              #####
-#####    Alle Werte sind intern °C, daher keine °F-Umrechnung noetig.                           #####
-#####################################################################################################
 interval:
+  # Copies mode and setpoints from the thermostat facade to the controllers.
+  # Change detection avoids needless state publishes. All values are °C internally.
   - interval: ${pid_sync_interval}s
     then:
       - lambda: |-
@@ -190,9 +167,9 @@ interval:
 
           if (heat_changed) {
             if (heat_enabled && isnan(t_low)) {
-              ESP_LOGW("${TAG_ADDON_CLIMATE_PID}", "Sollwert Heizen ist NAN - Sync uebersprungen");
+              ESP_LOGW("${TAG_ADDON_CLIMATE_PID}", "Heat setpoint is NAN - sync skipped");
             } else {
-              ESP_LOGD("${TAG_ADDON_CLIMATE_PID}", "Sync PID Heizen: enabled=%s target=%.2f°C",
+              ESP_LOGD("${TAG_ADDON_CLIMATE_PID}", "Sync PID heat: enabled=%s target=%.2f°C",
                        YESNO(heat_enabled), t_low);
               auto call = pid_heat_embedded->make_call();
               if (heat_enabled) {
@@ -208,9 +185,9 @@ interval:
 
           if (cool_changed) {
             if (cool_enabled && isnan(t_high)) {
-              ESP_LOGW("${TAG_ADDON_CLIMATE_PID}", "Sollwert Kuehlen ist NAN - Sync uebersprungen");
+              ESP_LOGW("${TAG_ADDON_CLIMATE_PID}", "Cool setpoint is NAN - sync skipped");
             } else {
-              ESP_LOGD("${TAG_ADDON_CLIMATE_PID}", "Sync PID Kuehlen: enabled=%s target=%.2f°C",
+              ESP_LOGD("${TAG_ADDON_CLIMATE_PID}", "Sync PID cool: enabled=%s target=%.2f°C",
                        YESNO(cool_enabled), t_high);
               auto call = pid_cool_embedded->make_call();
               if (cool_enabled) {
@@ -226,42 +203,35 @@ interval:
 
           last_mode = int(mode);
 
-#####################################################################################################
-##### 5. Diagnose-Sensoren: Stellgroessen der PIDs in Home Assistant (fuers Tuning).            #####
-#####################################################################################################
 sensor:
+  # Controller outputs and integral terms, for tuning in HA
   - platform: pid
     climate_id: pid_heat_embedded
-    name: PID Heizen Stellgroesse
+    name: ${pid_name_heat_output}
     type: HEAT
     entity_category: diagnostic
   - platform: pid
     climate_id: pid_cool_embedded
-    name: PID Kuehlen Stellgroesse
+    name: ${pid_name_cool_output}
     type: COOL
     entity_category: diagnostic
   - platform: pid
     climate_id: pid_heat_embedded
-    name: PID Heizen I-Anteil
+    name: ${pid_name_heat_integral}
     type: INTEGRAL
     entity_category: diagnostic
   - platform: pid
     climate_id: pid_cool_embedded
-    name: PID Kuehlen I-Anteil
+    name: ${pid_name_cool_integral}
     type: INTEGRAL
     entity_category: diagnostic
 
-#####################################################################################################
-##### 6. Live-Tuning aus Home Assistant: kp und Tn als einstellbare Nummern.                    #####
-#####    Wirken auf BEIDE Regler (Heizen und Kuehlen). Aenderungen werden sofort per           #####
-#####    climate.pid.set_control_parameters uebernommen - kein Neuflashen noetig.               #####
-#####    Nach dem ersten Boot sind diese Nummern die fuehrende Quelle (restore_value);          #####
-#####    die Substitutions pid_kp/pid_tn setzen nur den Startwert.                              #####
-#####################################################################################################
 number:
+  # Live tuning from HA, applied to both controllers without reflashing.
+  # After the first boot these entities are the source (restore_value); the substitutions are seeds only.
   - platform: template
     id: pid_tuning_kp
-    name: PID kp
+    name: ${pid_name_kp}
     entity_category: config
     icon: mdi:tune-vertical
     min_value: 0.05
@@ -275,7 +245,7 @@ number:
 
   - platform: template
     id: pid_tuning_tn
-    name: PID Tn
+    name: ${pid_name_tn}
     entity_category: config
     icon: mdi:timer-cog-outline
     unit_of_measurement: min
@@ -290,7 +260,7 @@ number:
 
   - platform: template
     id: pid_tuning_pwm_period
-    name: PID PWM Periode
+    name: ${pid_name_pwm_period}
     entity_category: config
     icon: mdi:sine-wave
     unit_of_measurement: s
@@ -304,13 +274,13 @@ number:
       - lambda: |-
           if (isnan(x) || x < 60.0f) return;
           const uint32_t ms = (uint32_t) (x * 1000.0f);
-          ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "PWM-Periode uebernommen: %.0fs", x);
+          ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "PWM period applied: %.0fs", x);
           pid_heat_pwm->set_period(ms);
           pid_cool_pwm->set_period(ms);
 
   - platform: template
     id: pid_tuning_deadband
-    name: PID Totzone
+    name: ${pid_name_deadband}
     entity_category: config
     icon: mdi:arrow-expand-vertical
     unit_of_measurement: "°C"
@@ -323,18 +293,19 @@ number:
     on_value:
       - lambda: |-
           if (isnan(x) || x < 0.0f) return;
-          ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "Totzone uebernommen: +/-%.2fK", x);
+          ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "Deadband applied: +/-%.2fK", x);
           pid_heat_embedded->set_threshold_high(x);
           pid_heat_embedded->set_threshold_low(-x);
           pid_cool_embedded->set_threshold_high(x);
           pid_cool_embedded->set_threshold_low(-x);
 
 script:
+  # Applies kp and Tn from the number entities to both controllers (ki = kp / Tn in seconds)
   - id: apply_pid_tuning
     mode: restart
     then:
       - lambda: |-
-          ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "Tuning uebernommen: kp=%.3f Tn=%.0fmin",
+          ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "Tuning applied: kp=%.3f Tn=%.0fmin",
                    pid_tuning_kp->state, pid_tuning_tn->state);
       - climate.pid.set_control_parameters:
           id: pid_heat_embedded
@@ -351,50 +322,13 @@ script:
 
 button:
   - platform: template
-    name: PID I-Anteil zuruecksetzen
+    name: ${pid_name_reset_integral}
     entity_category: config
     icon: mdi:restore
     on_press:
       - climate.pid.reset_integral_term: pid_heat_embedded
       - climate.pid.reset_integral_term: pid_cool_embedded
 
-#####################################################################################################
-##### EINBINDUNG - Beispiel fuer deine Panel-YAML:                                              #####
-#####                                                                                           #####
-##### substitutions:                                                                            #####
-#####   device_name: "mein-nspanel"                                                             #####
-#####   friendly_name: "Mein NSPanel"                                                           #####
-#####   wifi_ssid: !secret wifi_ssid                                                            #####
-#####   wifi_password: !secret wifi_password                                                    #####
-#####   heater_relay: "1"                                                                       #####
-#####   cooler_relay: "2"                                                                       #####
-#####   ## Optional: PID-Tuning                                                                 #####
-#####   # pid_kp: "0.3"                                                                         #####
-#####   # pid_ki: "0.00003"                                                                     #####
-#####   # pwm_period: "1200"                                                                    #####
-#####   # pid_starting_integral: "0.0"                                                          #####
-#####                                                                                           #####
-##### ## WICHTIG fuer autonomen Betrieb: Standard-Neustart bei Verbindungsverlust               #####
-##### ## deaktivieren (sonst Reboot alle 15 min ohne HA/WLAN, dabei gehen                       #####
-##### ## I-Anteil und PWM-Phase verloren):                                                      #####
-##### api:                                                                                      #####
-#####   reboot_timeout: 0s                                                                      #####
-##### wifi:                                                                                     #####
-#####   reboot_timeout: 0s                                                                      #####
-#####                                                                                           #####
-##### packages:                                                                                 #####
-#####   remote_package:                                                                         #####
-#####     url: https://github.com/froido/NSPanel-Easy-PID                                       #####
-#####     ref: main                                                                             #####
-#####     refresh: 300s                                                                         #####
-#####     files:                                                                                #####
-#####       - nspanel_esphome.yaml                            # Core                            #####
-#####       - nspanel_esphome_addon_climate_pid_dual.yaml     # dieses Add-on (Root-Wrapper)    #####
-#####       # KEINE der originalen climate_heat/cool/dual-Dateien laden und die                 #####
-#####       # climate_base NICHT zusaetzlich laden - sie wird unten bereits eingebunden!        #####
-#####################################################################################################
-
-# Climate-Basis nachladen (gleicher Mechanismus wie im originalen Dual-Add-on).
 packages:
   climate_base_package: !include nspanel_esphome_addon_climate_base.yaml
 ...

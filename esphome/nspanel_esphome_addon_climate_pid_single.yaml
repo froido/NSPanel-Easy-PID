@@ -1,23 +1,21 @@
 #####################################################################################################
 #####                 NSPanel Easy - https://github.com/edwardtfn/NSPanel-Easy                  #####
 #####################################################################################################
-##### ESPHome Add-on for Climate control - PID Single (Community-Anpassung)                     #####
-#####                                                                                           #####
-##### Einzelsollwert-Variante mit zentraler Betriebsart aus Home Assistant.                     #####
-#####                                                                                           #####
-##### Architektur:                                                                              #####
-#####   - thermostat_embedded laeuft als reiner Heiz-Thermostat (ein Sollwert, Modi off/heat).  #####
-#####     Am Panel bedeutet das nur noch: Raum AN (heat) oder AUS (off) + ein Sollwert.         #####
-#####     Er schaltet nur den Dummy-Relay 0.                                                    #####
-#####   - Die Betriebsart Heizen/Kuehlen kommt zentral aus einer HA-Entitaet                    #####
-#####     (${pid_mode_entity}). Sie wird im Flash gespeichert, damit das Panel auch ohne HA     #####
-#####     mit der letzten Betriebsart weiterregelt. Am Panel ist sie nicht umschaltbar.         #####
-#####   - Zwei interne PID-Regler (Heizen/Kuehlen) folgen demselben Sollwert. Je nach           #####
-#####     Betriebsart ist genau einer aktiv.                                                    #####
-#####   - Beide PIDs speisen EINEN slow_pwm-Ausgang auf relay_${valve_relay}                    #####
-#####     (gleiche Stellantriebe fuer Heizen und Kuehlen).                                      #####
-#####                                                                                           #####
-##### WICHTIG: Nicht zusammen mit climate_heat/cool/dual oder climate_pid_dual laden.           #####
+##### ESPHome Add-on for Climate control - PID Single (one setpoint, central heat/cool mode)    #####
+##### PLEASE only make changes if it is necessary and also the required knowledge is available. #####
+##### For normal use with the Blueprint, no changes are necessary.                              #####
+#####################################################################################################
+##### PI/PWM control for slow systems such as underfloor heating, with a single setpoint.       #####
+##### - thermostat_embedded acts as a heat-only facade: one setpoint, modes off/heat. On the    #####
+#####   panel this means "room on/off" plus the setpoint. It only switches the dummy relay 0.   #####
+##### - The operating mode (heat or cool) is read from a Home Assistant entity, so it can be    #####
+#####   switched centrally (e.g. together with the heat pump). It is stored in flash, so the    #####
+#####   panel keeps regulating in the last mode while Home Assistant is unavailable.            #####
+##### - Two internal PID controllers (heat/cool) follow the same setpoint; exactly one is       #####
+#####   active. Both feed one slow PWM output on one relay (shared valve actuators).            #####
+#####################################################################################################
+##### ATTENTION: Do NOT combine with climate_heat, climate_cool, climate_dual or                #####
+##### climate_pid_dual. The climate base is included by this file.                              #####
 #####################################################################################################
 ---
 substitutions:
@@ -25,42 +23,46 @@ substitutions:
   ## Change only in your      ##
   ## local yaml substitutions ##
   ##############################
-  # Relais, das die Stellantriebe schaltet (Heizen und Kuehlen)
-  valve_relay: "1"
-  # HA-Entitaet mit der zentralen Betriebsart. Erwartete Zustaende: "Heizen" / "Kühlen"
-  pid_mode_entity: input_select.heizung_betriebsart
-  pid_mode_heat_state: "Heizen"
-  pid_mode_cool_state: "Kühlen"
-  ### PID-Startwerte (nur erster Boot, danach fuehren die HA-Nummern) ###
-  pid_kp: "0.3"
-  pid_ki: "0.00003"
-  pid_kd: "0.0"
-  pid_tn: "180"
-  pid_deadband: "0.25"
-  pwm_period: "1200"
-  pid_starting_integral: "0.0"
-  pid_sync_interval: "10"
+  valve_relay: "1"                            # Relay switching the valve actuators (heating and cooling)
+  pid_mode_entity: input_select.climate_mode  # HA entity holding the central operating mode
+  pid_mode_heat_state: "Heat"                 # State of the mode entity that selects heating
+  pid_mode_cool_state: "Cool"                 # State of the mode entity that selects cooling
+  ### PID seed values (first boot only, afterwards the number entities in HA are the source) ###
+  pid_kp: "0.3"                 # Proportional gain: output share per Kelvin of error (0.3 = 30 %/K)
+  pid_ki: "0.00003"             # Compile-time default, overwritten at boot by ki = kp / (Tn * 60)
+  pid_kd: "0.0"                 # Derivative term, not useful for slow systems
+  pid_tn: "180"                 # Integral time Tn in minutes
+  pid_deadband: "0.25"          # Deadband around the setpoint in Kelvin (also when temp_units is °F)
+  pwm_period: "1200"            # PWM cycle time in seconds
+  pid_starting_integral: "0.0"  # Integral term after boot (0.0..1.0), not persisted in flash
+  pid_sync_interval: "10"       # Seconds between syncs thermostat -> PID controllers
+  ### Entity names (override to keep existing entity IDs or to localize) ###
+  pid_name_mode: "PID Operating mode"
+  pid_name_heat_output: "PID Heat output"
+  pid_name_cool_output: "PID Cool output"
+  pid_name_heat_integral: "PID Heat integral"
+  pid_name_cool_integral: "PID Cool integral"
+  pid_name_kp: "PID kp"
+  pid_name_tn: "PID Tn"
+  pid_name_pwm_period: "PID PWM period"
+  pid_name_deadband: "PID Deadband"
+  pid_name_reset_integral: "PID Reset integral"
   temp_max: ${113 if TEMP_UNIT_IS_FAHRENHEIT else 45}
   TAG_ADDON_CLIMATE_PID: nspanel.addon.climate.pid
 
 esphome:
   build_flags:
-    # Single-UI auf dem Display (ein Sollwert), wie beim originalen Heat-Add-on
-    - -D NSPANEL_EASY_ADDON_CLIMATE_HEAT
+    - -D NSPANEL_EASY_ADDON_CLIMATE_HEAT  # Single setpoint UI on the display, as with the heat add-on
     - -D NSPANEL_EASY_ADDON_CLIMATE_PID
 
-#####################################################################################################
-##### Zentrale Betriebsart (im Flash gespeichert)                                               #####
-#####################################################################################################
 globals:
-  - id: pid_cooling_mode
+  - id: pid_cooling_mode  # Central operating mode: true = cool, false = heat
     type: bool
     restore_value: true
-    initial_value: "false"
+    initial_value: 'false'  # Must be quoted: ESPHome expects the C++ initializer as a string
 
 text_sensor:
-  # Import der zentralen Betriebsart aus HA
-  - platform: homeassistant
+  - platform: homeassistant  # Central operating mode from Home Assistant
     id: pid_mode_from_ha
     entity_id: ${pid_mode_entity}
     internal: true
@@ -72,40 +74,37 @@ text_sensor:
           } else if (x == "${pid_mode_heat_state}") {
             cooling = false;
           } else {
-            ESP_LOGW("${TAG_ADDON_CLIMATE_PID}", "Unbekannte Betriebsart '%s' - ignoriert", x.c_str());
+            ESP_LOGW("${TAG_ADDON_CLIMATE_PID}", "Unknown operating mode '%s' - ignored", x.c_str());
             return;
           }
           if (cooling == id(pid_cooling_mode)) return;
-          ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "Betriebsart gewechselt: %s", cooling ? "Kuehlen" : "Heizen");
+          ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "Operating mode changed: %s", cooling ? "cool" : "heat");
           id(pid_cooling_mode) = cooling;
-          // I-Anteile verwerfen, damit kein Rest aus der alten Betriebsart nachwirkt
+          // Drop the integral terms, so nothing from the previous mode carries over
           pid_heat_embedded->reset_integral_term();
           pid_cool_embedded->reset_integral_term();
           id(pid_valve_pwm).set_level(0.0f);
       - script.execute: pid_sync
       - component.update: pid_mode_active
 
-  # Anzeige der aktiven Betriebsart in HA
-  - platform: template
+  - platform: template  # Active operating mode, for diagnostics in HA
     id: pid_mode_active
-    name: PID Betriebsart
+    name: ${pid_name_mode}
     icon: mdi:sun-snowflake-variant
     entity_category: diagnostic
     update_interval: 60s
     lambda: |-
-      return std::string(id(pid_cooling_mode) ? "Kühlen" : "Heizen");
+      return std::string(id(pid_cooling_mode) ? "${pid_mode_cool_state}" : "${pid_mode_heat_state}");
 
-#####################################################################################################
-##### 1. Thermostat als Einzelsollwert-Fassade (nur heat_action -> kein Zweipunkt-Modus)        #####
-#####################################################################################################
 climate:
+  # Heat-only facade: without cool_action the thermostat stays single setpoint (no two-point mode)
   - id: !extend thermostat_embedded
     min_heating_off_time: 1s
     min_heating_run_time: 1s
     heat_deadband: ${heat_deadband} ${temp_units}
     heat_overrun: ${heat_overrun} ${temp_units}
     heat_action:
-      - switch.turn_on: relay_0   # Dummy - Relais werden von den PIDs geschaltet
+      - switch.turn_on: relay_0   # Dummy, the valve relay is driven by the PID controllers
     idle_action:
       - switch.turn_off: relay_0  # Dummy
     preset:
@@ -116,46 +115,44 @@ climate:
         default_target_temperature_low: ${target_low} ${temp_units}
         mode: "heat"
 
-  #################################################################################################
-  ##### 2. Regler: Heizen (I-Anteil 0..1) und Kuehlen (I-Anteil -1..0)                        #####
-  #################################################################################################
+  # Two internal controllers: the ESPHome PID climate has no direction per mode (heat mode with
+  # both outputs would also cool), so heating and cooling use separate instances
   - platform: pid
     id: pid_heat_embedded
-    name: PID Heizen
+    name: PID Heat
     internal: true
     sensor: temp_nspanel
-    default_target_temperature: 21
+    default_target_temperature: 21  # Overwritten by the sync right after boot
     heat_output: pid_heat_out
     control_parameters:
       kp: ${pid_kp}
       ki: ${pid_ki}
       kd: ${pid_kd}
       starting_integral_term: ${pid_starting_integral}
-      min_integral: 0.0
+      min_integral: 0.0  # Heating: error and integral term are positive
       max_integral: 1.0
       output_averaging_samples: 5
     deadband_parameters:
       threshold_high: ${pid_deadband}°C
       threshold_low: -${pid_deadband}°C
-      kp_multiplier: 0.0
-      ki_multiplier: 0.05
+      kp_multiplier: 0.0   # No proportional reaction inside the deadband
+      ki_multiplier: 0.05  # Integral keeps creeping slowly inside the deadband
       kd_multiplier: 0.0
       deadband_output_averaging_samples: 15
 
   - platform: pid
     id: pid_cool_embedded
-    name: PID Kuehlen
+    name: PID Cool
     internal: true
     sensor: temp_nspanel
-    default_target_temperature: 24
+    default_target_temperature: 24  # Overwritten by the sync right after boot
     cool_output: pid_cool_out
     control_parameters:
       kp: ${pid_kp}
       ki: ${pid_ki}
       kd: ${pid_kd}
       starting_integral_term: -${pid_starting_integral}
-      # Kuehlen: Regelabweichung und I-Anteil sind negativ
-      min_integral: -1.0
+      min_integral: -1.0  # Cooling: error and integral term are negative
       max_integral: 0.0
       output_averaging_samples: 5
     deadband_parameters:
@@ -166,10 +163,8 @@ climate:
       kd_multiplier: 0.0
       deadband_output_averaging_samples: 15
 
-#####################################################################################################
-##### 3. Ausgaenge: beide PIDs -> ein gemeinsamer slow_pwm (nur der aktive darf schreiben)      #####
-#####################################################################################################
 output:
+  # Both controllers feed one shared slow PWM output; only the controller of the active mode may write
   - platform: template
     id: pid_heat_out
     type: float
@@ -184,7 +179,7 @@ output:
       - lambda: |-
           if (id(pid_cooling_mode)) id(pid_valve_pwm).set_level(state);
 
-  - platform: slow_pwm
+  - platform: slow_pwm  # Turns the controller output (0..100 %) into on/off cycles of the valve relay
     id: pid_valve_pwm
     period: ${pwm_period}s
     turn_on_action:
@@ -192,10 +187,8 @@ output:
     turn_off_action:
       - switch.turn_off: relay_${valve_relay}
 
-#####################################################################################################
-##### 4. Sync Thermostat + Betriebsart -> PIDs                                                  #####
-#####################################################################################################
 script:
+  # Copies room on/off, setpoint and operating mode from the thermostat facade to the controllers
   - id: pid_sync
     mode: queued
     then:
@@ -207,10 +200,11 @@ script:
           const bool cool_on = room_on && cooling;
 
           if (room_on && isnan(target)) {
-            ESP_LOGW("${TAG_ADDON_CLIMATE_PID}", "Sollwert ist NAN - Sync uebersprungen");
+            ESP_LOGW("${TAG_ADDON_CLIMATE_PID}", "Setpoint is NAN - sync skipped");
             return;
           }
 
+          // Only calls perform() on a change, to avoid needless state publishes
           auto apply = [&](climate::Climate *pid, bool on, climate::ClimateMode on_mode) {
             const auto want = on ? on_mode : climate::CLIMATE_MODE_OFF;
             const bool target_diff = on && (isnan(pid->target_temperature) ||
@@ -222,7 +216,7 @@ script:
             call.perform();
           };
 
-          // Zuerst den inaktiven Regler abschalten, dann den aktiven setzen
+          // Turn the inactive controller off first, then set the active one
           if (cooling) {
             apply(pid_heat_embedded, heat_on, climate::CLIMATE_MODE_HEAT);
             apply(pid_cool_embedded, cool_on, climate::CLIMATE_MODE_COOL);
@@ -232,11 +226,12 @@ script:
           }
           if (!room_on) id(pid_valve_pwm).set_level(0.0f);
 
+  # Applies kp and Tn from the number entities to both controllers (ki = kp / Tn in seconds)
   - id: apply_pid_tuning
     mode: restart
     then:
       - lambda: |-
-          ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "Tuning uebernommen: kp=%.3f Tn=%.0fmin",
+          ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "Tuning applied: kp=%.3f Tn=%.0fmin",
                    pid_tuning_kp->state, pid_tuning_tn->state);
       - climate.pid.set_control_parameters:
           id: pid_heat_embedded
@@ -256,38 +251,35 @@ interval:
     then:
       - script.execute: pid_sync
 
-#####################################################################################################
-##### 5. Diagnose-Sensoren                                                                      #####
-#####################################################################################################
 sensor:
+  # Controller outputs and integral terms, for tuning in HA
   - platform: pid
     climate_id: pid_heat_embedded
-    name: PID Heizen Stellgroesse
+    name: ${pid_name_heat_output}
     type: HEAT
     entity_category: diagnostic
   - platform: pid
     climate_id: pid_cool_embedded
-    name: PID Kuehlen Stellgroesse
+    name: ${pid_name_cool_output}
     type: COOL
     entity_category: diagnostic
   - platform: pid
     climate_id: pid_heat_embedded
-    name: PID Heizen I-Anteil
+    name: ${pid_name_heat_integral}
     type: INTEGRAL
     entity_category: diagnostic
   - platform: pid
     climate_id: pid_cool_embedded
-    name: PID Kuehlen I-Anteil
+    name: ${pid_name_cool_integral}
     type: INTEGRAL
     entity_category: diagnostic
 
-#####################################################################################################
-##### 6. Live-Tuning aus Home Assistant (unveraendert gegenueber pid_dual)                      #####
-#####################################################################################################
 number:
+  # Live tuning from HA, applied to both controllers without reflashing.
+  # After the first boot these entities are the source (restore_value); the substitutions are seeds only.
   - platform: template
     id: pid_tuning_kp
-    name: PID kp
+    name: ${pid_name_kp}
     entity_category: config
     icon: mdi:tune-vertical
     min_value: 0.05
@@ -301,7 +293,7 @@ number:
 
   - platform: template
     id: pid_tuning_tn
-    name: PID Tn
+    name: ${pid_name_tn}
     entity_category: config
     icon: mdi:timer-cog-outline
     unit_of_measurement: min
@@ -316,7 +308,7 @@ number:
 
   - platform: template
     id: pid_tuning_pwm_period
-    name: PID PWM Periode
+    name: ${pid_name_pwm_period}
     entity_category: config
     icon: mdi:sine-wave
     unit_of_measurement: s
@@ -329,12 +321,12 @@ number:
     on_value:
       - lambda: |-
           if (isnan(x) || x < 60.0f) return;
-          ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "PWM-Periode uebernommen: %.0fs", x);
+          ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "PWM period applied: %.0fs", x);
           pid_valve_pwm->set_period((uint32_t) (x * 1000.0f));
 
   - platform: template
     id: pid_tuning_deadband
-    name: PID Totzone
+    name: ${pid_name_deadband}
     entity_category: config
     icon: mdi:arrow-expand-vertical
     unit_of_measurement: "°C"
@@ -347,7 +339,7 @@ number:
     on_value:
       - lambda: |-
           if (isnan(x) || x < 0.0f) return;
-          ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "Totzone uebernommen: +/-%.2fK", x);
+          ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "Deadband applied: +/-%.2fK", x);
           pid_heat_embedded->set_threshold_high(x);
           pid_heat_embedded->set_threshold_low(-x);
           pid_cool_embedded->set_threshold_high(x);
@@ -355,7 +347,7 @@ number:
 
 button:
   - platform: template
-    name: PID I-Anteil zuruecksetzen
+    name: ${pid_name_reset_integral}
     entity_category: config
     icon: mdi:restore
     on_press:
