@@ -169,7 +169,9 @@ How it works:
   The operating mode (heat or cool) is read from `pid_mode_entity` and stored in flash,
   so the panel keeps the last mode while Home Assistant is unavailable.
   When the operating mode changes, the integral terms are reset and the valve is closed before the other controller takes over.
-  On the display the thermostat is always shown as a heater, also while cooling.
+  The display follows the operating mode: the climate chip and the icon on the climate page show a fire (heat) or a snowflake (cool),
+  colored while the valve is driven and gray while idle. On the climate page, the mode button shows heat or cool accordingly;
+  both buttons only switch the room on, the operating mode itself is changed in Home Assistant.
 
 > [!IMPORTANT]
 > Include **only one** climate package: either `pid_single` or `pid_dual`, not together with `climate_heat`, `climate_cool`, `climate_dual` or each other.

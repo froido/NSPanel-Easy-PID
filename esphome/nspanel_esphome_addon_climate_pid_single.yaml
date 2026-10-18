@@ -13,6 +13,9 @@
 #####   panel keeps regulating in the last mode while Home Assistant is unavailable.            #####
 ##### - Two internal PID controllers (heat/cool) follow the same setpoint; exactly one is       #####
 #####   active. Both feed one slow PWM output on one relay (shared valve actuators).            #####
+##### - The display follows the operating mode: the climate chip and the climate page show     #####
+#####   the action of the active controller (fire/snowflake), and the mode button on the        #####
+#####   climate page switches between heat and cool.                                            #####
 #####################################################################################################
 ##### ATTENTION: Do NOT combine with climate_heat, climate_cool, climate_dual or                #####
 ##### climate_pid_dual. The climate base is included by this file.                              #####
@@ -86,6 +89,7 @@ text_sensor:
           id(pid_valve_pwm).set_level(0.0f);
       - script.execute: pid_sync
       - component.update: pid_mode_active
+      - script.execute: pid_refresh_display
 
   - platform: template  # Active operating mode, for diagnostics in HA
     id: pid_mode_active
@@ -124,6 +128,8 @@ climate:
     sensor: temp_nspanel
     default_target_temperature: 21  # Overwritten by the sync right after boot
     heat_output: pid_heat_out
+    on_state:
+      - script.execute: pid_refresh_chip  # Action changed (heating/idle)
     control_parameters:
       kp: ${pid_kp}
       ki: ${pid_ki}
@@ -147,6 +153,8 @@ climate:
     sensor: temp_nspanel
     default_target_temperature: 24  # Overwritten by the sync right after boot
     cool_output: pid_cool_out
+    on_state:
+      - script.execute: pid_refresh_chip  # Action changed (cooling/idle)
     control_parameters:
       kp: ${pid_kp}
       ki: ${pid_ki}
@@ -188,6 +196,118 @@ output:
       - switch.turn_off: relay_${valve_relay}
 
 script:
+  #################################################################################################
+  ##### Display: replaces the climate chip of the climate base. The base derives icon and color  #####
+  ##### from the thermostat facade, which is always a heater and does not drive the relay. Here  #####
+  ##### they come from the operating mode and the action of the active controller instead.       #####
+  #################################################################################################
+  - id: !remove update_climate_chip
+
+  - id: update_climate_chip
+    mode: single
+    then:
+      - lambda: |-
+          const bool room_on = (thermostat_embedded->mode != climate::CLIMATE_MODE_OFF);
+          const bool cooling = id(pid_cooling_mode);
+          climate::Climate *pid = cooling ? static_cast<climate::Climate *>(pid_cool_embedded)
+                                          : static_cast<climate::Climate *>(pid_heat_embedded);
+          const uint8_t mode = room_on ? (cooling ? nspanel_easy::CLIMATE_MODE_COOL : nspanel_easy::CLIMATE_MODE_HEAT) : nspanel_easy::CLIMATE_MODE_OFF;
+          const uint8_t action = room_on ? static_cast<uint8_t>(pid->action) : static_cast<uint8_t>(nspanel_easy::CLIMATE_ACTION_OFF);
+          const bool is_active = (action == nspanel_easy::CLIMATE_ACTION_COOLING || action == nspanel_easy::CLIMATE_ACTION_HEATING);
+
+          const auto visibility = static_cast<nspanel_easy::ClimateChipVisibility>(id(climate_chip_visibility));
+          bool visible = false;
+          if (visibility == nspanel_easy::CLIMATE_CHIP_ALWAYS) {
+            visible = true;
+          } else if (visibility == nspanel_easy::CLIMATE_CHIP_ACTIVE_ONLY) {
+            visible = is_active;
+          }
+
+          // Active: colored fire/snowflake. Idle: gray fire/snowflake, so the mode stays visible. Off: none.
+          const char *icon = Icons::MDI_NONE;
+          uint16_t color = Colors::RGB565_BLACK;
+          if (visible) {
+            if (is_active) {
+              icon = climate_action_icons[action].icon;
+              color = climate_action_icons[action].color;
+            } else {
+              icon = climate_off_mode_icons[mode].icon;
+              color = climate_off_mode_icons[mode].color;
+            }
+          }
+          ESP_LOGV("${TAG_ADDON_CLIMATE_PID}", "Climate chip: mode=%u action=%u visible=%s",
+                   static_cast<unsigned>(mode), static_cast<unsigned>(action), YESNO(visible));
+
+          ChipState &the_chip = chip_states[CHIP_IDX_CLIMATE];
+          bool changed = false;
+          if (strcmp(the_chip.icon, icon) != 0) {
+            strncpy(the_chip.icon, icon, sizeof(the_chip.icon) - 1);
+            the_chip.icon[sizeof(the_chip.icon) - 1] = '\0';
+            changed = true;
+          }
+          if (the_chip.color != color) {
+            the_chip.color = color;
+            changed = true;
+          }
+          if (the_chip.visible != visible) {
+            the_chip.visible = visible;
+            changed = true;
+          }
+          if (changed) chip_render(CHIP_IDX_CLIMATE);
+
+          if (current_page_id != get_page_id("climate")) return;
+          if (!climate_embedded_visible) return;
+
+          // Target icon on the climate page: always show the mode, colored while active
+          const char *target_icon = is_active ? climate_action_icons[action].icon : climate_off_mode_icons[mode].icon;
+          const uint16_t target_color = is_active ? climate_action_icons[action].color : climate_off_mode_icons[mode].color;
+          disp1->set_component_text("target_icon", target_icon);
+          disp1->set_component_font_color("target_icon", static_cast<uint16_t>(target_color));
+
+  # Refreshes the climate chip when the embedded thermostat is the panel's main climate entity
+  - id: pid_refresh_chip
+    mode: single
+    then:
+      - lambda: |-
+          if (id(is_embedded_thermostat)) update_climate_chip->execute();
+
+  # Refreshes chip and climate page after a change of the operating mode
+  - id: pid_refresh_display
+    mode: single
+    then:
+      - script.execute: pid_refresh_chip
+      - lambda: |-
+          if (current_page_id == get_page_id("climate") and climate_embedded_visible) page_climate->execute();
+
+  # Climate page: show the button of the current operating mode (heat or cool) instead of the
+  # fixed heat button of the heat-only facade. Runs after the base has drawn the page.
+  - id: !extend page_climate
+    then:
+      - lambda: |-
+          if (!climate_embedded_visible) return;
+          if (current_page_id != get_page_id("climate")) return;
+          const bool room_on = (thermostat_embedded->mode != climate::CLIMATE_MODE_OFF);
+          if (id(pid_cooling_mode)) {
+            disp1->hide_component("button03");  // Heat
+            disp1->show_component("button04");  // Cool
+            disp1->set_component_font_color("climate.button04", static_cast<uint16_t>(
+              room_on ? Colors::RGB565_BLUE : Colors::RGB565_GRAY_LIGHT));
+          } else {
+            disp1->show_component("button03");  // Heat, colored by the base
+            disp1->hide_component("button04");  // Cool
+          }
+
+  # The cool button sends hvac_mode "cool", which the heat-only facade rejects (logged by the base).
+  # In this add-on both mode buttons mean "room on", so map it to heat.
+  - id: !extend change_climate_state
+    then:
+      - lambda: |-
+          if (!climate_embedded_visible) return;
+          if (key != "hvac_mode" || value != "cool") return;
+          auto call = thermostat_embedded->make_call();
+          call.set_mode(climate::CLIMATE_MODE_HEAT);
+          call.perform();
+
   # Copies room on/off, setpoint and operating mode from the thermostat facade to the controllers
   - id: pid_sync
     mode: queued
