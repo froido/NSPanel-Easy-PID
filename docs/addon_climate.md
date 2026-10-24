@@ -204,6 +204,7 @@ In PID mode, the deadband and overrun keys of the thermostat only affect the act
 | pwm_period | both | Optional | Seconds | `1200` | PWM cycle time. Seed for the first boot only. |
 | pid_starting_integral | both | Optional | `0.0` to `1.0` | `0.0` | Integral term after a boot, e.g. the typical average output in winter, to shorten settling after a reboot. |
 | pid_sync_interval | both | Optional | Seconds | `10` | Interval for syncing the thermostat to the controllers. |
+| pid_boost_duration | single | Optional | Minutes | `30` | Boost duration. Seed for the first boot only. |
 | pid_name_* | both | Optional | String | English names, see below | Entity names, e.g. to localize them or to keep existing entity IDs. |
 
 <!-- markdownlint-enable MD013 MD033 -->
@@ -226,8 +227,23 @@ Changes are applied immediately, without reflashing.
 | PID Heat integral | `pid_name_heat_integral` | Diagnostic | Integral term of the heat controller. |
 | PID Cool integral | `pid_name_cool_integral` | Diagnostic | Integral term of the cool controller. |
 | PID Operating mode | `pid_name_mode` | Diagnostic | *Single only:* operating mode currently used by the panel. |
+| PID Boost | `pid_name_boost` | - | *Single only:* switch opening the valve fully for the boost duration, see below. |
+| PID Boost duration | `pid_name_boost_duration` | Config | *Single only:* boost duration in minutes (`5` to `240`). |
 
 <!-- markdownlint-enable MD013 -->
+
+### PID boost (single only)
+
+The `PID Boost` switch opens the valve fully for `PID Boost duration` minutes, bypassing the controller.
+In cooling mode, this means full cooling.
+The controllers keep running in the background; when the boost ends, the valve is handed back to the controller of the active operating mode.
+Turning the switch off ends the boost early, turning it on again restarts the duration.
+The boost is ignored while the room is off, and it ends when the room is switched off or the operating mode changes.
+On the display, the climate chip shows the active fire or snowflake during the boost.
+
+> [!NOTE]
+> The integral term keeps working during the boost. As the room approaches the setpoint faster,
+> it usually builds up less than without the boost, but a slight overshoot after the boost is possible.
 
 ### PID tuning
 

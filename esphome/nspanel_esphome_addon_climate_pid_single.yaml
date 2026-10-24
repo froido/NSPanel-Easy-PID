@@ -13,9 +13,10 @@
 #####   panel keeps regulating in the last mode while Home Assistant is unavailable.            #####
 ##### - Two internal PID controllers (heat/cool) follow the same setpoint; exactly one is       #####
 #####   active. Both feed one slow PWM output on one relay (shared valve actuators).            #####
-##### - The display follows the operating mode: the climate chip and the climate page show     #####
+##### - The display follows the operating mode: the climate chip and the climate page show      #####
 #####   the action of the active controller (fire/snowflake), and the mode button on the        #####
 #####   climate page switches between heat and cool.                                            #####
+##### - Boost: a switch opens the valve fully for a set time, bypassing the controller.         #####
 #####################################################################################################
 ##### ATTENTION: Do NOT combine with climate_heat, climate_cool, climate_dual or                #####
 ##### climate_pid_dual. The climate base is included by this file.                              #####
@@ -39,6 +40,7 @@ substitutions:
   pwm_period: "1200"            # PWM cycle time in seconds
   pid_starting_integral: "0.0"  # Integral term after boot (0.0..1.0), not persisted in flash
   pid_sync_interval: "10"       # Seconds between syncs thermostat -> PID controllers
+  pid_boost_duration: "30"      # Boost duration in minutes. Seed for the first boot only
   ### Entity names (override to keep existing entity IDs or to localize) ###
   pid_name_mode: "PID Operating mode"
   pid_name_heat_output: "PID Heat output"
@@ -50,6 +52,8 @@ substitutions:
   pid_name_pwm_period: "PID PWM period"
   pid_name_deadband: "PID Deadband"
   pid_name_reset_integral: "PID Reset integral"
+  pid_name_boost: "PID Boost"
+  pid_name_boost_duration: "PID Boost duration"
   temp_max: ${113 if TEMP_UNIT_IS_FAHRENHEIT else 45}
   TAG_ADDON_CLIMATE_PID: nspanel.addon.climate.pid
 
@@ -62,6 +66,11 @@ globals:
   - id: pid_cooling_mode  # Central operating mode: true = cool, false = heat
     type: bool
     restore_value: true
+    initial_value: 'false'  # Must be quoted: ESPHome expects the C++ initializer as a string
+
+  - id: pid_boost_active  # True while the boost holds the valve fully open
+    type: bool
+    restore_value: false
     initial_value: 'false'  # Must be quoted: ESPHome expects the C++ initializer as a string
 
 text_sensor:
@@ -83,6 +92,13 @@ text_sensor:
           if (cooling == id(pid_cooling_mode)) return;
           ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "Operating mode changed: %s", cooling ? "cool" : "heat");
           id(pid_cooling_mode) = cooling;
+          // A running boost ends with the operating mode it was started in
+          if (id(pid_boost_active)) {
+            pid_boost_run->stop();
+            id(pid_boost_active) = false;
+            id(pid_boost_switch).publish_state(false);
+            ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "Boost cancelled by operating mode change");
+          }
           // Drop the integral terms, so nothing from the previous mode carries over
           pid_heat_embedded->reset_integral_term();
           pid_cool_embedded->reset_integral_term();
@@ -178,6 +194,7 @@ output:
     type: float
     write_action:
       - lambda: |-
+          if (id(pid_boost_active)) return;  // The boost owns the valve
           if (!id(pid_cooling_mode)) id(pid_valve_pwm).set_level(state);
 
   - platform: template
@@ -185,6 +202,7 @@ output:
     type: float
     write_action:
       - lambda: |-
+          if (id(pid_boost_active)) return;  // The boost owns the valve
           if (id(pid_cooling_mode)) id(pid_valve_pwm).set_level(state);
 
   - platform: slow_pwm  # Turns the controller output (0..100 %) into on/off cycles of the valve relay
@@ -196,11 +214,11 @@ output:
       - switch.turn_off: relay_${valve_relay}
 
 script:
-  #################################################################################################
-  ##### Display: replaces the climate chip of the climate base. The base derives icon and color  #####
-  ##### from the thermostat facade, which is always a heater and does not drive the relay. Here  #####
-  ##### they come from the operating mode and the action of the active controller instead.       #####
-  #################################################################################################
+  ###################################################################################################
+  ##### Display: replaces the climate chip of the climate base. The base derives icon and color #####
+  ##### from the thermostat facade, which is always a heater and does not drive the relay. Here #####
+  ##### they come from the operating mode and the action of the active controller instead.      #####
+  ###################################################################################################
   - id: !remove update_climate_chip
 
   - id: update_climate_chip
@@ -212,7 +230,10 @@ script:
           climate::Climate *pid = cooling ? static_cast<climate::Climate *>(pid_cool_embedded)
                                           : static_cast<climate::Climate *>(pid_heat_embedded);
           const uint8_t mode = room_on ? (cooling ? nspanel_easy::CLIMATE_MODE_COOL : nspanel_easy::CLIMATE_MODE_HEAT) : nspanel_easy::CLIMATE_MODE_OFF;
-          const uint8_t action = room_on ? static_cast<uint8_t>(pid->action) : static_cast<uint8_t>(nspanel_easy::CLIMATE_ACTION_OFF);
+          uint8_t action = room_on ? static_cast<uint8_t>(pid->action) : static_cast<uint8_t>(nspanel_easy::CLIMATE_ACTION_OFF);
+          if (room_on && id(pid_boost_active)) {  // Boost: the valve is open regardless of the controller
+            action = cooling ? nspanel_easy::CLIMATE_ACTION_COOLING : nspanel_easy::CLIMATE_ACTION_HEATING;
+          }
           const bool is_active = (action == nspanel_easy::CLIMATE_ACTION_COOLING || action == nspanel_easy::CLIMATE_ACTION_HEATING);
 
           const auto visibility = static_cast<nspanel_easy::ClimateChipVisibility>(id(climate_chip_visibility));
@@ -308,6 +329,54 @@ script:
           call.set_mode(climate::CLIMATE_MODE_HEAT);
           call.perform();
 
+  ###################################################################################################
+  ##### Boost: holds the valve fully open for pid_boost_duration minutes, then hands it back    #####
+  ##### to the active controller. The controllers keep running meanwhile. Switching the room    #####
+  ##### off or changing the operating mode ends the boost. Starting it again restarts the time. #####
+  ###################################################################################################
+  - id: pid_boost_run
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: return thermostat_embedded->mode == climate::CLIMATE_MODE_OFF;
+          then:
+            - lambda: |-
+                ESP_LOGW("${TAG_ADDON_CLIMATE_PID}", "Boost ignored: room is off");
+                id(pid_boost_switch).publish_state(false);
+          else:
+            - lambda: |-
+                ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "Boost started for %.0f min (%s)",
+                         id(pid_boost_duration).state, id(pid_cooling_mode) ? "cool" : "heat");
+                id(pid_boost_active) = true;
+                id(pid_boost_switch).publish_state(true);
+                id(pid_valve_pwm).set_level(1.0f);
+            - script.execute: pid_refresh_chip
+            - delay: !lambda "return static_cast<uint32_t>(id(pid_boost_duration).state * 60000.0f);"
+            - script.execute: pid_boost_end
+
+  - id: pid_boost_stop
+    mode: single
+    then:
+      - script.stop: pid_boost_run
+      - script.execute: pid_boost_end
+
+  # Ends the boost and hands the valve back to the controller of the active mode
+  - id: pid_boost_end
+    mode: single
+    then:
+      - lambda: |-
+          if (!id(pid_boost_active)) return;
+          id(pid_boost_active) = false;
+          id(pid_boost_switch).publish_state(false);
+          const bool room_on = (thermostat_embedded->mode != climate::CLIMATE_MODE_OFF);
+          const float output = id(pid_cooling_mode) ? -pid_cool_embedded->get_output_value()
+                                                    : pid_heat_embedded->get_output_value();
+          const float level = room_on ? std::min(1.0f, std::max(0.0f, output)) : 0.0f;
+          id(pid_valve_pwm).set_level(level);
+          ESP_LOGI("${TAG_ADDON_CLIMATE_PID}", "Boost ended, valve back to controller (%.0f %%)", level * 100.0f);
+      - script.execute: pid_refresh_chip
+
   # Copies room on/off, setpoint and operating mode from the thermostat facade to the controllers
   - id: pid_sync
     mode: queued
@@ -344,6 +413,7 @@ script:
             apply(pid_cool_embedded, cool_on, climate::CLIMATE_MODE_COOL);
             apply(pid_heat_embedded, heat_on, climate::CLIMATE_MODE_HEAT);
           }
+          if (!room_on && id(pid_boost_active)) pid_boost_stop->execute();  // Room off ends the boost
           if (!room_on) id(pid_valve_pwm).set_level(0.0f);
 
   # Applies kp and Tn from the number entities to both controllers (ki = kp / Tn in seconds)
@@ -464,6 +534,31 @@ number:
           pid_heat_embedded->set_threshold_low(-x);
           pid_cool_embedded->set_threshold_high(x);
           pid_cool_embedded->set_threshold_low(-x);
+
+  - platform: template
+    id: pid_boost_duration
+    name: ${pid_name_boost_duration}
+    entity_category: config
+    icon: mdi:timer-play-outline
+    unit_of_measurement: min
+    min_value: 5
+    max_value: 240
+    step: 5
+    initial_value: ${pid_boost_duration}
+    restore_value: true
+    optimistic: true
+
+switch:
+  - platform: template  # Boost: valve fully open for the set duration, turns itself off afterwards
+    id: pid_boost_switch
+    name: ${pid_name_boost}
+    icon: mdi:rocket-launch
+    optimistic: false  # State is published by the boost scripts
+    restore_mode: ALWAYS_OFF
+    turn_on_action:
+      - script.execute: pid_boost_run
+    turn_off_action:
+      - script.execute: pid_boost_stop
 
 button:
   - platform: template
