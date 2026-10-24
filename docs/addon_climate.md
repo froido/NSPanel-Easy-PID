@@ -205,6 +205,8 @@ In PID mode, the deadband and overrun keys of the thermostat only affect the act
 | pid_starting_integral | both | Optional | `0.0` to `1.0` | `0.0` | Integral term after a boot, e.g. the typical average output in winter, to shorten settling after a reboot. |
 | pid_sync_interval | both | Optional | Seconds | `10` | Interval for syncing the thermostat to the controllers. |
 | pid_boost_duration | single | Optional | Minutes | `30` | Boost duration. Seed for the first boot only. |
+| pid_boost_chip | single | Optional | `chip01` to `chip07` or `""` | `chip07` | User chip on the home page taken over for the boost. It can no longer be configured in the Blueprint. `""` disables the boost chip. |
+| pid_number_mode | both | Optional | `box` or `slider` | `box` | Input mode of the number entities in Home Assistant: type a value or use a slider. |
 | pid_name_* | both | Optional | String | English names, see below | Entity names, e.g. to localize them or to keep existing entity IDs. |
 
 <!-- markdownlint-enable MD013 MD033 -->
@@ -229,6 +231,7 @@ Changes are applied immediately, without reflashing.
 | PID Operating mode | `pid_name_mode` | Diagnostic | *Single only:* operating mode currently used by the panel. |
 | PID Boost | `pid_name_boost` | - | *Single only:* switch opening the valve fully for the boost duration, see below. |
 | PID Boost duration | `pid_name_boost_duration` | Config | *Single only:* boost duration in minutes (`5` to `240`). |
+| PID Boost end | `pid_name_boost_end` | - | *Single only:* end of the running boost as timestamp, shown as a countdown in Home Assistant; unknown while no boost is running. |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -239,7 +242,12 @@ In cooling mode, this means full cooling.
 The controllers keep running in the background; when the boost ends, the valve is handed back to the controller of the active operating mode.
 Turning the switch off ends the boost early, turning it on again restarts the duration.
 The boost is ignored while the room is off, and it ends when the room is switched off or the operating mode changes.
-On the display, the climate chip shows the active fire or snowflake during the boost.
+On the display, the boost has its own chip (rocket, orange when heating, blue when cooling) in the user chip slot set by `pid_boost_chip`.
+The chip is driven by the panel itself and also works without Home Assistant; that slot is no longer available in the Blueprint.
+On the climate page, a rocket button starts and stops the boost, and the remaining time is shown in minutes next to an hourglass while it runs.
+The climate chip keeps showing the active fire or snowflake, as the valve is open.
+The `PID Boost end` sensor holds the end time; Home Assistant shows it as a live countdown (e.g. "in 25 minutes").
+It needs a synchronized clock and stays unknown if the panel has no time from Home Assistant yet.
 
 > [!NOTE]
 > The integral term keeps working during the boost. As the room approaches the setpoint faster,

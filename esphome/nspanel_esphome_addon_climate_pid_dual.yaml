@@ -31,6 +31,7 @@ substitutions:
   pwm_period: "1200"            # PWM cycle time in seconds
   pid_starting_integral: "0.0"  # Integral term after boot (0.0..1.0), not persisted in flash
   pid_sync_interval: "10"       # Seconds between syncs thermostat -> PID controllers
+  pid_number_mode: "box"        # Input mode of the number entities in HA: "box" (type a value) or "slider"
   ### Entity names (override to keep existing entity IDs or to localize) ###
   pid_name_heat_output: "PID Heat output"
   pid_name_cool_output: "PID Cool output"
@@ -240,6 +241,7 @@ number:
     initial_value: ${pid_kp}
     restore_value: true
     optimistic: true
+    mode: ${pid_number_mode}
     on_value:
       - script.execute: apply_pid_tuning
 
@@ -255,6 +257,7 @@ number:
     initial_value: ${pid_tn}
     restore_value: true
     optimistic: true
+    mode: ${pid_number_mode}
     on_value:
       - script.execute: apply_pid_tuning
 
@@ -270,6 +273,7 @@ number:
     initial_value: ${pwm_period}
     restore_value: true
     optimistic: true
+    mode: ${pid_number_mode}
     on_value:
       - lambda: |-
           if (isnan(x) || x < 60.0f) return;
@@ -290,6 +294,7 @@ number:
     initial_value: ${pid_deadband}
     restore_value: true
     optimistic: true
+    mode: ${pid_number_mode}
     on_value:
       - lambda: |-
           if (isnan(x) || x < 0.0f) return;
